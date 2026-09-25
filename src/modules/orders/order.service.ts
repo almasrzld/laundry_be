@@ -1,0 +1,160 @@
+import { OrderRepository, OrderEntity, TimelineStepEntity } from './order.repository';
+import { CryptoUtil } from '../../utils/crypto.util';
+import { InvoiceGeneratorUtil } from '../../utils/invoice-generator.util';
+
+export class OrderService {
+  private orderRepository: OrderRepository;
+
+  constructor(orderRepository?: OrderRepository) {
+    this.orderRepository = orderRepository || new OrderRepository();
+  }
+
+  private formatTimeline(t: TimelineStepEntity): TimelineStepEntity {
+    const rawId = Number(t.id_order_timelines ?? t.id);
+    const rawOrderId = Number(t.orders_id ?? t.order_id);
+    const rawStatusId = t.order_statuses_id ? Number(t.order_statuses_id) : null;
+    return {
+      ...t,
+      id_order_timelines: rawId,
+      id: CryptoUtil.encryptId(rawId) ?? String(rawId),
+      orders_id: rawOrderId,
+      order_id: CryptoUtil.encryptId(rawOrderId) ?? String(rawOrderId),
+      order_statuses_id: rawStatusId,
+      status_id: rawStatusId ? (CryptoUtil.encryptId(rawStatusId) ?? String(rawStatusId)) : null,
+    };
+  }
+
+  private formatOrder(o: OrderEntity): OrderEntity & {
+    status_id?: string | null;
+    order_status?: {
+      id: string;
+      name: string;
+      code: string;
+      step_order: number;
+      color_hex?: string | null;
+      badge_variant?: string | null;
+    } | null;
+  } {
+    const rawId = Number(o.id_orders ?? o.id);
+    const rawUserId = o.users_id || o.user_id ? Number(o.users_id ?? o.user_id) : null;
+    const rawStatusId = o.order_statuses_id ? Number(o.order_statuses_id) : null;
+
+    const encryptedStatusId = rawStatusId ? (CryptoUtil.encryptId(rawStatusId) ?? String(rawStatusId)) : null;
+
+    const orderStatusObj = rawStatusId
+      ? {
+          id: encryptedStatusId || String(rawStatusId),
+          name: o.status_name || o.status,
+          code: o.status_code || '',
+          step_order: o.status_step_order || 1,
+          color_hex: o.status_color_hex || '#0284c7',
+          badge_variant: o.status_badge_variant || 'info',
+        }
+      : null;
+
+    return {
+      ...o,
+      id_orders: rawId,
+      id: CryptoUtil.encryptId(rawId) ?? String(rawId),
+      users_id: rawUserId ?? undefined,
+      user_id: rawUserId ? (CryptoUtil.encryptId(rawUserId) ?? String(rawUserId)) : undefined,
+      order_statuses_id: rawStatusId,
+      status_id: encryptedStatusId,
+      status: o.status_name || o.status,
+      order_status: orderStatusObj,
+      timeline: o.timeline ? o.timeline.map((t) => this.formatTimeline(t)) : [],
+    };
+  }
+
+  async getOrders(filter?: 'active' | 'history'): Promise<OrderEntity[]> {
+    const list = await this.orderRepository.findAll(filter);
+    return list.map((o) => this.formatOrder(o));
+  }
+
+  async getOrderById(id: string): Promise<OrderEntity | null> {
+    const order = await this.orderRepository.findById(id);
+    if (!order) {
+      throw new Error('Pesanan laundry tidak ditemukan');
+    }
+    return this.formatOrder(order);
+  }
+
+  async createOrder(
+    data: {
+      user_id?: string;
+      users_id?: string | number;
+      service_name: string;
+      service_type?: string;
+      order_statuses_id?: string | number;
+      status?: string;
+      quantity: number;
+      unit?: string;
+      price_per_unit: number;
+      delivery_fee?: number;
+      discount?: number;
+      pickup_address: string;
+      delivery_address?: string;
+      courier_name?: string;
+      courier_phone?: string;
+      notes?: string;
+      order_date?: string | Date;
+      estimated_completion_date?: string | Date;
+    },
+    creatorPic?: number | null
+  ): Promise<OrderEntity> {
+    const now = new Date(data.order_date || Date.now());
+    const invoiceNo = await InvoiceGeneratorUtil.generateInvoiceNo({ date: now });
+    const rawUserId = data.users_id || data.user_id;
+
+    const newOrder: OrderEntity = {
+      invoice_no: invoiceNo,
+      users_id: rawUserId,
+      user_id: rawUserId,
+      service_name: data.service_name,
+      service_type: data.service_type || 'Kiloan',
+      order_date: now.toISOString(),
+      estimated_completion_date: data.estimated_completion_date
+        ? new Date(data.estimated_completion_date).toISOString()
+        : new Date(now.getTime() + 48 * 3600 * 1000).toISOString(),
+      status: data.status || '',
+      order_statuses_id: data.order_statuses_id || null,
+      quantity: Number(data.quantity) || 1.0,
+      unit: data.unit || 'kg',
+      price_per_unit: Number(data.price_per_unit) || 0,
+      delivery_fee: Number(data.delivery_fee) || 0,
+      discount: Number(data.discount) || 0,
+      pickup_address: data.pickup_address,
+      delivery_address: data.delivery_address || data.pickup_address,
+      courier_name: data.courier_name || '',
+      courier_phone: data.courier_phone || '',
+      notes: data.notes || '',
+    };
+
+    const created = await this.orderRepository.create(newOrder, creatorPic || undefined);
+    return this.formatOrder(created);
+  }
+
+  async updateOrder(
+    id: string,
+    data: Partial<OrderEntity>,
+    updatePic?: number
+  ): Promise<OrderEntity> {
+    const updated = await this.orderRepository.updateOrder(id, data, updatePic);
+    if (!updated) {
+      throw new Error('Pesanan tidak ditemukan atau gagal diperbarui');
+    }
+    return this.formatOrder(updated);
+  }
+
+  async updateOrderStatus(
+    id: string,
+    newStatusOrId: string | number,
+    updatePic?: number
+  ): Promise<{ success: boolean; message: string }> {
+    const success = await this.orderRepository.updateStatus(id, newStatusOrId, updatePic);
+    if (!success) {
+      throw new Error('Gagal memperbarui status pesanan');
+    }
+    return { success: true, message: `Status pesanan berhasil diperbarui` };
+  }
+}
