@@ -1,12 +1,15 @@
 import { OrderRepository, OrderEntity, TimelineStepEntity } from './order.repository';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { InvoiceGeneratorUtil } from '../../utils/invoice-generator.util';
+import { NotificationService } from '../notifications/notification.service';
 
 export class OrderService {
   private orderRepository: OrderRepository;
+  private notificationService: NotificationService;
 
-  constructor(orderRepository?: OrderRepository) {
+  constructor(orderRepository?: OrderRepository, notificationService?: NotificationService) {
     this.orderRepository = orderRepository || new OrderRepository();
+    this.notificationService = notificationService || new NotificationService();
   }
 
   private formatTimeline(t: TimelineStepEntity): TimelineStepEntity {
@@ -131,18 +134,73 @@ export class OrderService {
     };
 
     const created = await this.orderRepository.create(newOrder, creatorPic || undefined);
+
+    // 1. Trigger Notifikasi: Pesanan Baru Masuk (Ditujukan ke Admin & Kasir)
+    try {
+      await this.notificationService.notifyOrderCreated({
+        id_orders: Number(created.id_orders || created.id),
+        invoice_no: created.invoice_no,
+        service_name: created.service_name,
+        users_id: created.users_id,
+        pickup_address: created.pickup_address,
+      }, creatorPic || null);
+    } catch (notifErr) {
+      console.warn('[Notification Warning] Gagal membuat notifikasi pesanan baru:', notifErr);
+    }
+
     return this.formatOrder(created);
   }
 
   async updateOrder(
     id: string,
-    data: Partial<OrderEntity>,
+    data: Partial<OrderEntity> & { courier_user_id?: string | number; courier_users_id?: string | number },
     updatePic?: number
   ): Promise<OrderEntity> {
+    const existingOrder = await this.orderRepository.findById(id);
     const updated = await this.orderRepository.updateOrder(id, data, updatePic);
     if (!updated) {
       throw new Error('Pesanan tidak ditemukan atau gagal diperbarui');
     }
+
+    // 2. Trigger Notifikasi: Penugasan Kurir (Ke Pelanggan & Kurir)
+    try {
+      const isCourierAssigned =
+        Boolean(data.courier_name && data.courier_name.trim().length > 0) &&
+        (existingOrder?.courier_name !== data.courier_name || existingOrder?.courier_phone !== data.courier_phone);
+
+      if (isCourierAssigned) {
+        await this.notificationService.notifyCourierAssigned({
+          order: updated,
+          courierName: data.courier_name!,
+          courierPhone: data.courier_phone,
+          courierUserId: data.courier_users_id || data.courier_user_id || null,
+          creatorPic: updatePic || null,
+        });
+      }
+    } catch (notifErr) {
+      console.warn('[Notification Warning] Gagal membuat notifikasi penugasan kurir:', notifErr);
+    }
+
+    // 3. Trigger Notifikasi: Status Cucian Selesai / Siap Diantar (Ke Pelanggan)
+    try {
+      const newStatus = updated.status || '';
+      const oldStatus = existingOrder?.status || '';
+      const isReadyOrCompleted =
+        newStatus.toLowerCase().includes('siap diantar') ||
+        newStatus.toLowerCase().includes('selesai') ||
+        newStatus.toLowerCase().includes('antar');
+
+      if (isReadyOrCompleted && newStatus !== oldStatus) {
+        await this.notificationService.notifyOrderStatusReady({
+          order: updated,
+          statusName: newStatus,
+          creatorPic: updatePic || null,
+        });
+      }
+    } catch (notifErr) {
+      console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
+    }
+
     return this.formatOrder(updated);
   }
 
@@ -151,10 +209,35 @@ export class OrderService {
     newStatusOrId: string | number,
     updatePic?: number
   ): Promise<{ success: boolean; message: string }> {
+    const existingOrder = await this.orderRepository.findById(id);
     const success = await this.orderRepository.updateStatus(id, newStatusOrId, updatePic);
     if (!success) {
       throw new Error('Gagal memperbarui status pesanan');
     }
+
+    // 3. Trigger Notifikasi: Status Cucian Selesai / Siap Diantar (Ke Pelanggan)
+    try {
+      const updatedOrder = await this.orderRepository.findById(id);
+      if (updatedOrder) {
+        const newStatus = updatedOrder.status || '';
+        const oldStatus = existingOrder?.status || '';
+        const isReadyOrCompleted =
+          newStatus.toLowerCase().includes('siap diantar') ||
+          newStatus.toLowerCase().includes('selesai') ||
+          newStatus.toLowerCase().includes('antar');
+
+        if (isReadyOrCompleted && newStatus !== oldStatus) {
+          await this.notificationService.notifyOrderStatusReady({
+            order: updatedOrder,
+            statusName: newStatus,
+            creatorPic: updatePic || null,
+          });
+        }
+      }
+    } catch (notifErr) {
+      console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
+    }
+
     return { success: true, message: `Status pesanan berhasil diperbarui` };
   }
 }

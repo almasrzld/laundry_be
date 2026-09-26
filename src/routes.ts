@@ -13,6 +13,7 @@ import shelfTypeRoutes from './modules/shelf-types/shelf-type.routes';
 import storageShelfRoutes from './modules/storage-shelves/storage-shelf.routes';
 import paymentMethodRoutes from './modules/payment-methods/payment-method.routes';
 import orderStatusRoutes from './modules/order-statuses/order-status.routes';
+import notificationRoutes from './modules/notifications/notification.routes';
 import { sendSuccess } from './utils/response.util';
 
 const apiRouter = Router();
@@ -30,6 +31,7 @@ apiRouter.get('/health', (req, res) => {
 apiRouter.use('/auth', authRoutes);
 apiRouter.use('/services', serviceRoutes);
 apiRouter.use('/orders', orderRoutes);
+apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/promos', promoRoutes);
 apiRouter.use('/user', userRoutes);
 apiRouter.use('/system', systemRoutes);
