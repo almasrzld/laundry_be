@@ -22,13 +22,16 @@ export const authMiddleware = async (
   next: NextFunction
 ): Promise<void> => {
   const authHeader = req.headers.authorization;
+  let token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token && req.query && typeof req.query.token === 'string') {
+    token = req.query.token;
+  }
+
+  if (!token) {
     sendError(res, 'Token autentikasi tidak ditemukan atau format salah', 401);
     return;
   }
-
-  const token = authHeader.split(' ')[1];
 
   try {
     const decoded = jwt.verify(token, ENV.JWT_SECRET) as any;
