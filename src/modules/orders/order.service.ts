@@ -2,6 +2,7 @@ import { OrderRepository, OrderEntity, TimelineStepEntity } from './order.reposi
 import { CryptoUtil } from '../../utils/crypto.util';
 import { InvoiceGeneratorUtil } from '../../utils/invoice-generator.util';
 import { NotificationService } from '../notifications/notification.service';
+import { UserRepository } from '../user/user.repository';
 
 export class OrderService {
   private orderRepository: OrderRepository;
@@ -201,6 +202,9 @@ export class OrderService {
       console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
     }
 
+    // 4. Trigger Reward Points: Otomatis jika status Pesanan Selesai
+    await this.awardRewardPointsIfCompleted(updated, existingOrder?.status);
+
     return this.formatOrder(updated);
   }
 
@@ -233,11 +237,54 @@ export class OrderService {
             creatorPic: updatePic || null,
           });
         }
+
+        // 4. Trigger Reward Points: Otomatis jika status Pesanan Selesai
+        await this.awardRewardPointsIfCompleted(updatedOrder, existingOrder?.status);
       }
     } catch (notifErr) {
       console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
     }
 
     return { success: true, message: `Status pesanan berhasil diperbarui` };
+  }
+
+  private async awardRewardPointsIfCompleted(order: OrderEntity, previousStatus?: string): Promise<void> {
+    try {
+      const currentStatus = (order.status || '').toLowerCase();
+      const prevStatus = (previousStatus || '').toLowerCase();
+      const isCompleted = currentStatus.includes('selesai');
+      const wasAlreadyCompleted = prevStatus.includes('selesai');
+
+      if (!isCompleted || wasAlreadyCompleted) return;
+
+      const rawUserId = order.users_id || order.user_id;
+      if (!rawUserId) return;
+
+      const numericOrderId = order.id_orders || order.id;
+
+      // Hitung total belanja pesanan: (qty * price) + delivery - discount
+      const totalAmount = Math.max(
+        0,
+        Math.round(
+          (Number(order.quantity) || 1) * (Number(order.price_per_unit) || 0) +
+          (Number(order.delivery_fee) || 0) -
+          (Number(order.discount) || 0)
+        )
+      );
+
+      // Formula Reward: 1 Poin per Rp 1.000 (minimal 5 poin per pesanan selesai)
+      const earnedPoints = Math.max(5, Math.floor(totalAmount / 1000));
+
+      const userRepository = new UserRepository();
+      await userRepository.addRewardPoints(
+        rawUserId,
+        earnedPoints,
+        numericOrderId,
+        `Reward Pesanan #${order.invoice_no} (+${earnedPoints} Poin)`,
+        `Pesanan ${order.service_name} telah selesai. Poin reward otomatis ditambahkan ke akun Anda!`
+      );
+    } catch (e: any) {
+      console.warn('[Reward Points Warning] Gagal memberikan poin reward otomatis:', e.message);
+    }
   }
 }

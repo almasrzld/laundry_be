@@ -328,4 +328,107 @@ export class UserRepository {
     }
     return res.affectedRows > 0;
   }
+
+  async addRewardPoints(
+    userId: string | number,
+    points: number,
+    orderId?: string | number | null,
+    title?: string,
+    description?: string
+  ): Promise<boolean> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const numericOrderId = orderId ? (CryptoUtil.decryptId(orderId) ?? Number(orderId)) : null;
+    if (!numericUserId || points <= 0) return false;
+
+    await query(
+      'UPDATE users SET reward_points = COALESCE(reward_points, 0) + ? WHERE id_users = ? AND deleted_at IS NULL',
+      [points, numericUserId]
+    );
+
+    try {
+      await query(
+        `INSERT INTO point_histories (users_id, orders_id, points, type, title, description)
+         VALUES (?, ?, ?, 'earn', ?, ?)`,
+        [
+          numericUserId,
+          numericOrderId,
+          points,
+          title || `Reward Pesanan Selesai (+${points} Poin)`,
+          description || `Poin reward otomatis dari transaksi laundry`,
+        ]
+      );
+    } catch (e) {
+      console.warn('[PointHistory Warning] Gagal menyimpan riwayat poin:', e);
+    }
+
+    return true;
+  }
+
+  async deductRewardPoints(
+    userId: string | number,
+    points: number,
+    title?: string,
+    description?: string
+  ): Promise<boolean> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId || points <= 0) return false;
+
+    const res: any = await query(
+      'UPDATE users SET reward_points = reward_points - ? WHERE id_users = ? AND reward_points >= ? AND deleted_at IS NULL',
+      [points, numericUserId, points]
+    );
+
+    if (res.affectedRows > 0) {
+      try {
+        await query(
+          `INSERT INTO point_histories (users_id, points, type, title, description)
+           VALUES (?, ?, 'redeem', ?, ?)`,
+          [
+            numericUserId,
+            points,
+            title || `Penukaran Poin (-${points} Poin)`,
+            description || `Poin ditukarkan dengan voucher diskon`,
+          ]
+        );
+      } catch (e) {
+        console.warn('[PointHistory Warning] Gagal menyimpan riwayat penukaran poin:', e);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  async getPointHistories(userId: string | number): Promise<PointHistoryEntity[]> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId) return [];
+
+    try {
+      const rows = await query<any>(
+        'SELECT id_point_histories, users_id, orders_id, points, type, title, description, created_at FROM point_histories WHERE users_id = ? ORDER BY id_point_histories DESC LIMIT 50',
+        [numericUserId]
+      );
+      return rows.map(r => ({
+        ...r,
+        id: CryptoUtil.encryptId(r.id_point_histories) ?? String(r.id_point_histories),
+        user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+        order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+      }));
+    } catch (_) {
+      return [];
+    }
+  }
+}
+
+export interface PointHistoryEntity {
+  id?: number | string;
+  id_point_histories?: number | string;
+  user_id?: number | string;
+  users_id?: number | string;
+  order_id?: number | string | null;
+  orders_id?: number | string | null;
+  points: number;
+  type: 'earn' | 'redeem';
+  title: string;
+  description?: string | null;
+  created_at?: Date | string;
 }

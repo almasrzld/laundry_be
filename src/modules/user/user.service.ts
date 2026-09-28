@@ -71,4 +71,41 @@ export class UserService {
     }
     return this.userRepository.changePassword(userId, oldPass, newPass, updatePic || undefined, securityQuestions);
   }
+
+  async getPointHistories(userId: string) {
+    return this.userRepository.getPointHistories(userId);
+  }
+
+  async redeemPoints(userId: string, points: number, title?: string, description?: string) {
+    if (!points || points <= 0) {
+      throw new Error('Jumlah poin yang ditukarkan harus lebih dari 0');
+    }
+
+    const profile = await this.userRepository.getProfile(userId);
+    if (!profile) {
+      throw new Error('Pengguna tidak ditemukan');
+    }
+
+    const currentPoints = profile.reward_points || 0;
+    if (currentPoints < points) {
+      throw new Error(`Poin Anda tidak mencukupi (Poin Anda: ${currentPoints}, Dibutuhkan: ${points})`);
+    }
+
+    const success = await this.userRepository.deductRewardPoints(
+      userId,
+      points,
+      title || `Tukar Voucher Diskon (-${points} Poin)`,
+      description || `Penukaran ${points} poin dengan voucher diskon Almas Laundry`
+    );
+
+    if (!success) {
+      throw new Error('Gagal menukarkan poin, silakan coba kembali');
+    }
+
+    return {
+      success: true,
+      message: `Selamat! Berhasil menukarkan ${points} poin reward`,
+      remaining_points: currentPoints - points,
+    };
+  }
 }

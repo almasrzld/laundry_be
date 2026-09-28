@@ -116,4 +116,33 @@ export class UserController {
       sendError(res, error.message || 'Gagal memperbarui password', 400);
     }
   };
+
+  getPointHistories = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const list = await this.userService.getPointHistories(String(userId));
+      sendSuccess(res, list, 'Riwayat poin reward berhasil diambil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengambil riwayat poin', 400);
+    }
+  };
+
+  redeemPoints = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const { points, title, description } = req.body;
+      const result = await this.userService.redeemPoints(String(userId), Number(points), title, description);
+      sendSuccess(res, result, result.message);
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menukarkan poin', 400);
+    }
+  };
 }

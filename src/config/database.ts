@@ -41,6 +41,35 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
   try {
     const connection = await pool.getConnection();
     console.log(`  ${pc.green('✔')} ${pc.bold(pc.green('[Database]'))} Berhasil terhubung ke MySQL ${pc.cyan(`${ENV.DB_HOST}:${ENV.DB_PORT}/${ENV.DB_DATABASE}`)}`);
+
+    // Auto-create point_histories table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS point_histories (
+          id_point_histories INT AUTO_INCREMENT PRIMARY KEY,
+          users_id INT NOT NULL,
+          orders_id INT NULL,
+          points INT NOT NULL,
+          type VARCHAR(20) NOT NULL DEFAULT 'earn',
+          title VARCHAR(150) NOT NULL,
+          description VARCHAR(255) NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_point_users (users_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] point_histories table check:', e.message);
+    }
+
+    // Auto-add reward_points_awarded column to orders if not exists
+    try {
+      await connection.query(`
+        ALTER TABLE orders ADD COLUMN reward_points_awarded TINYINT(1) NOT NULL DEFAULT 0;
+      `);
+    } catch (_) {
+      // Column already exists
+    }
+
     connection.release();
     return true;
   } catch (error: any) {
