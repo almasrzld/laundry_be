@@ -145,4 +145,20 @@ export class UserController {
       sendError(res, error.message || 'Gagal menukarkan poin', 400);
     }
   };
+
+  getWalletTransactions = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const limit = req.query.limit ? Number(req.query.limit) : 50;
+      const list = await this.userService.getWalletTransactions(String(userId), limit);
+      sendSuccess(res, list, 'Riwayat mutasi saldo LaundryPay berhasil diambil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengambil riwayat transaksi', 400);
+    }
+  };
 }
+

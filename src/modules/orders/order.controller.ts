@@ -4,7 +4,7 @@ import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
 import { CryptoUtil } from '../../utils/crypto.util';
-import { isCustomerRole } from '../../utils/role.util';
+import { isCustomerRole, isCourierRole } from '../../utils/role.util';
 
 export class OrderController {
   private orderService: OrderService;
@@ -23,8 +23,9 @@ export class OrderController {
       if (user) {
         const roleCode = user.role_code || user.role || '';
         const isCustomer = await isCustomerRole(roleCode);
-        if (isCustomer) {
-          // Customer hanya boleh melihat daftar pesanannya sendiri
+        const isCourier = await isCourierRole(roleCode);
+        if (isCustomer || isCourier) {
+          // Customer & Kurir hanya boleh melihat daftar pesanannya sendiri
           targetUserId = user.id;
         } else {
           // Staf / Admin dapat melihat semua pesanan atau menyaring berdasarkan user_id jika ada
@@ -200,6 +201,40 @@ export class OrderController {
       sendSuccess(res, result, 'Status pesanan berhasil diperbarui');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal memperbarui status pesanan', 400);
+    }
+  };
+
+  submitRating = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const { rating, review, tip_amount } = req.body;
+      const numRating = Number(rating);
+      if (!rating || isNaN(numRating) || numRating < 1 || numRating > 5) {
+        sendError(res, 'Rating wajib bernilai antara 1 sampai 5 bintang', 400);
+        return;
+      }
+
+      const numTip = tip_amount ? Math.max(0, Number(tip_amount)) : 0;
+      const rawUserId = req.user?.id ?? (req.user as any)?.id_users;
+      const decryptedUserId = rawUserId
+        ? (CryptoUtil.decryptId(rawUserId) ?? (typeof rawUserId === 'number' ? rawUserId : parseInt(String(rawUserId), 10) || null))
+        : null;
+
+      if (!decryptedUserId) {
+        sendError(res, 'Sesi autentikasi tidak valid atau pengguna tidak ditemukan', 401);
+        return;
+      }
+
+      const success = await this.orderService.submitRating(id, {
+        rating: numRating,
+        review: review ? String(review).trim() : undefined,
+        tip_amount: numTip,
+        userId: Number(decryptedUserId),
+      });
+
+      sendSuccess(res, { success }, 'Terima kasih atas penilaian dan ulasan Anda!');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menyimpan ulasan pesanan', 400);
     }
   };
 }

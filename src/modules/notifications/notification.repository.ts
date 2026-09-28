@@ -1,6 +1,6 @@
 import { query } from '../../config/database';
 import { CryptoUtil } from '../../utils/crypto.util';
-import { isCustomerRole } from '../../utils/role.util';
+import { isCustomerRole, isAdminOrStaffRole } from '../../utils/role.util';
 import { hasRolePermission } from '../../middleware/permission.middleware';
 import { emitNotificationEvent } from './notification.events';
 
@@ -46,23 +46,23 @@ export class NotificationRepository {
       params.push(userId);
     }
 
-    // 2. Notifikasi yang ditargetkan spesifik ke roleCode pengguna saat ini (dinamis tanpa hardcode)
+    // 2. Notifikasi Berbasis Role (HANYA jika users_id IS NULL / bukan notifikasi personal pengguna lain)
     if (roleCode && roleCode.trim() !== '') {
       const cleanRole = roleCode.trim().toLowerCase();
-      conditions.push(`(n.target_role IS NOT NULL AND (LOWER(n.target_role) = ? OR FIND_IN_SET(?, LOWER(n.target_role)) > 0))`);
+      conditions.push(`(n.users_id IS NULL AND n.target_role IS NOT NULL AND (LOWER(n.target_role) = ? OR FIND_IN_SET(?, LOWER(n.target_role)) > 0))`);
       params.push(cleanRole, cleanRole);
     }
 
-    // 3. Notifikasi Operasional Pesanan (order_created / legacy target_role 'admin' / 'staff')
-    // Diperiksa secara dinamis ke database apakah role ini bukan customer dan memiliki izin operasional pesanan
-    const isCust = await isCustomerRole(roleCode);
-    const canManageOrders = !isCust && roleCode
+    // 3. Notifikasi Operasional Pesanan (order_created / target_role 'admin' / 'staff' tanpa users_id)
+    // Diperiksa secara dinamis: hanya staf/admin internal operasional (bukan customer dan bukan kurir) yang memiliki izin kelola pesanan
+    const isAdminStaff = await isAdminOrStaffRole(roleCode);
+    const canManageOrders = isAdminStaff && roleCode
       ? await hasRolePermission(roleCode, ['admin.akses.index', 'order.edit', 'order.index'])
       : false;
 
     if (canManageOrders) {
-      // Staf operasional berhak melihat notifikasi pesanan masuk & notifikasi operasional
-      conditions.push(`(n.type = 'order_created' OR LOWER(n.target_role) = 'admin' OR LOWER(n.target_role) = 'staff')`);
+      // Staf/Admin operasional berhak melihat notifikasi pesanan masuk & notifikasi operasional internal
+      conditions.push(`(n.users_id IS NULL AND (n.type = 'order_created' OR LOWER(n.target_role) = 'admin' OR LOWER(n.target_role) = 'staff'))`);
     }
 
     // 4. Notifikasi Siaran Umum (Broadcast ke semua pengguna: tanpa users_id dan tanpa target_role spesifik)

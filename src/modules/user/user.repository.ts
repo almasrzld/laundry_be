@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { query } from '../../config/database';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { UserEntity } from '../auth/auth.repository';
-import { isCustomerRole } from '../../utils/role.util';
+import { isCustomerRole, getPermissionsForRole } from '../../utils/role.util';
 
 export interface AddressEntity {
   id?: string | number;
@@ -32,7 +32,7 @@ export interface SecurityQuestionsWithAnswersEntity extends SecurityQuestionsEnt
 }
 
 export class UserRepository {
-  async getProfile(userId: string | number): Promise<(UserEntity & { has_security_questions: boolean; is_customer: boolean; security_questions?: SecurityQuestionsEntity }) | null> {
+  async getProfile(userId: string | number): Promise<(UserEntity & { has_security_questions: boolean; is_customer: boolean; security_questions?: SecurityQuestionsEntity; permissions?: string[] }) | null> {
     const numericId = CryptoUtil.decryptId(userId) ?? userId;
     const results = await query<UserEntity>(
       'SELECT id_users, name_users, email, phone, role_code, status, member_tier, laundry_pay_balance, reward_points, created_at, creator, updated_at, update_pic, deleted_at, delete_pic FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
@@ -43,12 +43,14 @@ export class UserRepository {
 
     const sq = await this.getSecurityQuestions(numericId);
     const isCustomer = await isCustomerRole(user.role_code);
+    const permissions = await getPermissionsForRole(user.role_code);
 
     return {
       ...user,
       has_security_questions: Boolean(sq),
       is_customer: isCustomer,
       security_questions: sq || undefined,
+      permissions,
     };
   }
 
@@ -412,6 +414,48 @@ export class UserRepository {
         id: CryptoUtil.encryptId(r.id_point_histories) ?? String(r.id_point_histories),
         user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
         order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+      }));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  async getWalletTransactions(userId: string | number, limit: number = 50): Promise<any[]> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId) return [];
+
+    try {
+      const rows = await query<any>(
+        `SELECT 
+           wt.id_wallet_transactions,
+           wt.users_id,
+           wt.orders_id,
+           wt.type,
+           wt.category,
+           wt.amount,
+           wt.balance_before,
+           wt.balance_after,
+           wt.title,
+           wt.description,
+           wt.reference_no,
+           wt.created_at,
+           o.invoice_no
+         FROM wallet_transactions wt
+         LEFT JOIN orders o ON wt.orders_id = o.id_orders
+         WHERE wt.users_id = ?
+         ORDER BY wt.created_at DESC, wt.id_wallet_transactions DESC
+         LIMIT ?`,
+        [numericUserId, Number(limit) || 50]
+      );
+
+      return rows.map(r => ({
+        ...r,
+        id: CryptoUtil.encryptId(r.id_wallet_transactions) ?? String(r.id_wallet_transactions),
+        user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+        order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+        amount: Number(r.amount) || 0,
+        balance_before: Number(r.balance_before) || 0,
+        balance_after: Number(r.balance_after) || 0,
       }));
     } catch (_) {
       return [];

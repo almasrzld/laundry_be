@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { AuthRepository, UserEntity } from './auth.repository';
 import { UserRepository } from '../user/user.repository';
 import { ENV } from '../../config/env';
-import { isCustomerRole } from '../../utils/role.util';
+import { isCustomerRole, getPermissionsForRole } from '../../utils/role.util';
 
 export class AuthError extends Error {
   statusCode: number;
@@ -185,11 +185,13 @@ export class AuthService {
     );
 
     const { password: _, ...userWithoutPassword } = user;
+    const permissions = await getPermissionsForRole(user.role_code);
 
     return {
       token,
       user: {
         ...userWithoutPassword,
+        permissions,
         ...(userCode ? { user_code: String(userCode) } : {}),
       },
     };
@@ -221,14 +223,21 @@ export class AuthService {
         id: newUser.id,
         email: newUser.email,
         name: newUser.name,
+        role_code: newUser.role_code || 'customer',
+        role: newUser.role_code || 'customer',
       },
       ENV.JWT_SECRET,
       { expiresIn: '30d' }
     );
 
+    const permissions = await getPermissionsForRole(newUser.role_code);
+
     return {
       token,
-      user: newUser,
+      user: {
+        ...newUser,
+        permissions,
+      },
     };
   }
 

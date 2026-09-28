@@ -17,6 +17,7 @@ export interface UserEntity {
   lockout_stage?: number;
   locked_until?: Date | string | null;
   is_permanently_locked?: number | boolean;
+  permissions?: string[];
   created_at?: Date | string;
   creator?: number | null;
   updated_at?: Date | string;

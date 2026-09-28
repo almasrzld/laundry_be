@@ -70,6 +70,122 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
       // Column already exists
     }
 
+    // Auto-add rating, review, tip_amount, rated_at columns to orders if not exists
+    try {
+      await connection.query(`
+        ALTER TABLE orders 
+          ADD COLUMN rating INT NULL DEFAULT NULL,
+          ADD COLUMN review TEXT NULL DEFAULT NULL,
+          ADD COLUMN tip_amount INT NOT NULL DEFAULT 0,
+          ADD COLUMN rated_at DATETIME NULL DEFAULT NULL;
+      `);
+    } catch (_) {
+      // Columns already exist
+    }
+
+    // Auto-create wallet_transactions table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS wallet_transactions (
+          id_wallet_transactions INT AUTO_INCREMENT PRIMARY KEY,
+          users_id INT NOT NULL,
+          orders_id INT NULL,
+          type ENUM('credit', 'debit') NOT NULL DEFAULT 'credit',
+          category VARCHAR(50) NOT NULL DEFAULT 'tip',
+          amount INT NOT NULL,
+          balance_before INT NOT NULL DEFAULT 0,
+          balance_after INT NOT NULL DEFAULT 0,
+          title VARCHAR(150) NOT NULL,
+          description TEXT NULL,
+          reference_no VARCHAR(100) NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (users_id) REFERENCES users(id_users) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] wallet_transactions table check:', e.message);
+    }
+
+    // Auto-sync existing tips to courier laundry_pay_balance & wallet_transactions
+    try {
+      const [couriersWithTips]: any = await connection.query(`
+        SELECT 
+          u.id_users, 
+          u.name_users,
+          u.laundry_pay_balance,
+          COALESCE(SUM(o.tip_amount), 0) AS total_tips
+        FROM users u
+        JOIN orders o ON (
+          LOWER(TRIM(o.courier_name)) = LOWER(TRIM(u.name_users)) 
+          OR (u.phone IS NOT NULL AND u.phone != '' AND REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = REPLACE(REPLACE(u.phone, '-', ''), ' ', ''))
+        )
+        WHERE o.deleted_at IS NULL AND o.tip_amount > 0 AND u.deleted_at IS NULL
+        GROUP BY u.id_users, u.name_users, u.laundry_pay_balance
+      `);
+
+      if (Array.isArray(couriersWithTips)) {
+        for (const row of couriersWithTips) {
+          const tips = Number(row.total_tips) || 0;
+          const currentBal = Number(row.laundry_pay_balance) || 0;
+          if (tips > 0 && currentBal < tips) {
+            await connection.query(
+              'UPDATE users SET laundry_pay_balance = ? WHERE id_users = ?',
+              [tips, row.id_users]
+            );
+          }
+        }
+      }
+
+      // Populate historical tips into wallet_transactions if not present
+      const [ordersWithTips]: any = await connection.query(`
+        SELECT 
+          o.id_orders,
+          o.invoice_no,
+          o.tip_amount,
+          o.created_at,
+          o.rated_at,
+          u.id_users AS courier_user_id,
+          u.name_users AS courier_name,
+          cust.name_users AS customer_name
+        FROM orders o
+        JOIN users u ON (
+          LOWER(TRIM(o.courier_name)) = LOWER(TRIM(u.name_users))
+          OR (u.phone IS NOT NULL AND u.phone != '' AND REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = REPLACE(REPLACE(u.phone, '-', ''), ' ', ''))
+        )
+        LEFT JOIN users cust ON o.users_id = cust.id_users
+        WHERE o.deleted_at IS NULL AND o.tip_amount > 0 AND u.deleted_at IS NULL
+      `);
+
+      if (Array.isArray(ordersWithTips)) {
+        for (const ord of ordersWithTips) {
+          const [exists]: any = await connection.query(
+            'SELECT id_wallet_transactions FROM wallet_transactions WHERE users_id = ? AND orders_id = ? AND category = "tip" LIMIT 1',
+            [ord.courier_user_id, ord.id_orders]
+          );
+          if (!exists || exists.length === 0) {
+            const custName = ord.customer_name || 'Pelanggan';
+            await connection.query(`
+              INSERT INTO wallet_transactions 
+                (users_id, orders_id, type, category, amount, balance_before, balance_after, title, description, reference_no, created_at)
+              VALUES (?, ?, 'credit', 'tip', ?, 0, ?, ?, ?, ?, COALESCE(?, ?, NOW()))
+            `, [
+              ord.courier_user_id,
+              ord.id_orders,
+              ord.tip_amount,
+              ord.tip_amount,
+              'Tips Pengantaran Pesanan',
+              `Tips sebesar Rp ${Number(ord.tip_amount).toLocaleString('id-ID')} dari ${custName} untuk pesanan #${ord.invoice_no}`,
+              ord.invoice_no,
+              ord.rated_at,
+              ord.created_at
+            ]);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] tips balance & transaction sync:', e.message);
+    }
+
     connection.release();
     return true;
   } catch (error: any) {

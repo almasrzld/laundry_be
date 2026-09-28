@@ -108,4 +108,9 @@ export class UserService {
       remaining_points: currentPoints - points,
     };
   }
+
+  async getWalletTransactions(userId: string, limit?: number) {
+    return this.userRepository.getWalletTransactions(userId, limit);
+  }
 }
+
