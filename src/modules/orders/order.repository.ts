@@ -189,15 +189,23 @@ export class OrderRepository {
     });
   }
 
-  async findAll(statusFilter?: 'active' | 'history'): Promise<OrderEntity[]> {
-    const sql = `
+  async findAll(statusFilter?: 'active' | 'history', userId?: string | number): Promise<OrderEntity[]> {
+    let sql = `
       SELECT ${ORDER_SELECT} 
       FROM orders o
       LEFT JOIN master_order_statuses mos ON o.order_statuses_id = mos.id_order_statuses AND mos.deleted_at IS NULL
-      WHERE o.deleted_at IS NULL 
-      ORDER BY o.order_date DESC
+      WHERE o.deleted_at IS NULL
     `;
-    const orders = await query<OrderEntity>(sql);
+    const params: any[] = [];
+
+    if (userId !== undefined && userId !== null && String(userId).trim() !== '') {
+      const numericUserId = CryptoUtil.decryptId(userId) ?? userId;
+      sql += ' AND o.users_id = ?';
+      params.push(numericUserId);
+    }
+
+    sql += ' ORDER BY o.order_date DESC';
+    const orders = await query<OrderEntity>(sql, params);
 
     for (const order of orders) {
       const stepOrder = Number(order.status_step_order) || 1;

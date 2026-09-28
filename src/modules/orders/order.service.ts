@@ -69,8 +69,8 @@ export class OrderService {
     };
   }
 
-  async getOrders(filter?: 'active' | 'history'): Promise<OrderEntity[]> {
-    const list = await this.orderRepository.findAll(filter);
+  async getOrders(filter?: 'active' | 'history', userId?: string | number): Promise<OrderEntity[]> {
+    const list = await this.orderRepository.findAll(filter, userId);
     return list.map((o) => this.formatOrder(o));
   }
 

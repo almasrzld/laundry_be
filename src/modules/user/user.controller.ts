@@ -58,6 +58,28 @@ export class UserController {
     }
   };
 
+  updateAddress = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const addressId = req.params.id;
+      const picId = getPicId(req);
+      await this.userService.updateAddress(addressId, req.body, picId);
+      sendSuccess(res, null, 'Alamat penjemputan berhasil diperbarui');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal memperbarui alamat', 400);
+    }
+  };
+
+  deleteAddress = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const addressId = req.params.id;
+      const picId = getPicId(req);
+      await this.userService.deleteAddress(addressId, picId);
+      sendSuccess(res, null, 'Alamat berhasil dihapus');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menghapus alamat', 400);
+    }
+  };
+
   updateProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;

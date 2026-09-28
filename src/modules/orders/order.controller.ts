@@ -3,6 +3,8 @@ import { OrderService } from './order.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { CryptoUtil } from '../../utils/crypto.util';
+import { isCustomerRole } from '../../utils/role.util';
 
 export class OrderController {
   private orderService: OrderService;
@@ -14,7 +16,27 @@ export class OrderController {
   getOrders = async (req: Request, res: Response): Promise<void> => {
     try {
       const type = req.query.type as 'active' | 'history' | undefined;
-      const orders = await this.orderService.getOrders(type);
+      const user = (req as AuthenticatedRequest).user;
+
+      let targetUserId: string | number | undefined = undefined;
+
+      if (user) {
+        const roleCode = user.role_code || user.role || '';
+        const isCustomer = await isCustomerRole(roleCode);
+        if (isCustomer) {
+          // Customer hanya boleh melihat daftar pesanannya sendiri
+          targetUserId = user.id;
+        } else {
+          // Staf / Admin dapat melihat semua pesanan atau menyaring berdasarkan user_id jika ada
+          targetUserId = (req.query.user_id || req.query.users_id) as string | undefined;
+        }
+      } else {
+        // Akses tanpa login tidak diizinkan melihat pesanan
+        sendSuccess(res, [], 'Daftar pesanan kosong');
+        return;
+      }
+
+      const orders = await this.orderService.getOrders(type, targetUserId);
       sendSuccess(res, orders, 'Daftar pesanan berhasil diambil');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal mengambil daftar pesanan', 500);
@@ -24,7 +46,30 @@ export class OrderController {
   getOrderById = async (req: Request, res: Response): Promise<void> => {
     try {
       const { id } = req.params;
+      const user = (req as AuthenticatedRequest).user;
+
+      if (!user) {
+        sendError(res, 'Akses tidak diizinkan, silakan login terlebih dahulu', 401);
+        return;
+      }
+
       const order = await this.orderService.getOrderById(id);
+      if (!order) {
+        sendError(res, 'Pesanan tidak ditemukan', 404);
+        return;
+      }
+
+      const roleCode = user.role_code || user.role || '';
+      const isCustomer = await isCustomerRole(roleCode);
+      if (isCustomer) {
+        const orderUserId = Number(order.users_id ?? (order.user_id ? CryptoUtil.decryptId(order.user_id) : null));
+        const currentUserId = Number(CryptoUtil.decryptId(user.id) ?? user.id);
+        if (orderUserId && currentUserId && orderUserId !== currentUserId) {
+          sendError(res, 'Anda tidak memiliki akses ke pesanan ini', 403);
+          return;
+        }
+      }
+
       sendSuccess(res, order, 'Detail pesanan berhasil diambil');
     } catch (error: any) {
       sendError(res, error.message || 'Pesanan tidak ditemukan', 404);
@@ -84,6 +129,21 @@ export class OrderController {
   updateOrder = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { id } = req.params;
+      const user = req.user;
+      if (user) {
+        const roleCode = user.role_code || user.role || '';
+        const isCustomer = await isCustomerRole(roleCode);
+        if (isCustomer) {
+          const existingOrder = await this.orderService.getOrderById(id);
+          const orderUserId = Number(existingOrder?.users_id ?? (existingOrder?.user_id ? CryptoUtil.decryptId(existingOrder.user_id) : null));
+          const currentUserId = Number(CryptoUtil.decryptId(user.id) ?? user.id);
+          if (orderUserId && currentUserId && orderUserId !== currentUserId) {
+            sendError(res, 'Anda tidak memiliki hak untuk mengubah pesanan ini', 403);
+            return;
+          }
+        }
+      }
+
       const {
         service_name,
         service_type,

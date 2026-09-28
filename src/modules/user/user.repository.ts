@@ -130,7 +130,7 @@ export class UserRepository {
   async getAddresses(userId: string | number): Promise<AddressEntity[]> {
     const numericId = CryptoUtil.decryptId(userId) ?? userId;
     const results = await query<AddressEntity>(
-      'SELECT id_addresses, users_id, label, full_address, note, is_default, created_at, creator, updated_at, update_pic, deleted_at, delete_pic FROM addresses WHERE users_id = ? AND deleted_at IS NULL',
+      'SELECT id_addresses, users_id, label, full_address, note, is_default, created_at, creator, updated_at, update_pic, deleted_at, delete_pic FROM addresses WHERE users_id = ? AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC, id_addresses DESC',
       [numericId]
     );
     return results;
@@ -143,6 +143,13 @@ export class UserRepository {
     const fullAddress = address.full_address || '';
     const note = address.note || '';
     const isDefault = address.is_default ? 1 : 0;
+
+    if (isDefault === 1) {
+      await query(
+        'UPDATE addresses SET is_default = 0 WHERE users_id = ? AND deleted_at IS NULL',
+        [numericUserId]
+      );
+    }
 
     const res: any = await query(
       'INSERT INTO addresses (users_id, label, full_address, note, is_default, created_at, creator) VALUES (?, ?, ?, ?, ?, NOW(), ?)',
@@ -274,9 +281,51 @@ export class UserRepository {
     return true;
   }
 
+  async updateAddress(id: string | number, address: Partial<AddressEntity>, updatePic?: number): Promise<boolean> {
+    const numericId = CryptoUtil.decryptId(id) ?? id;
+    const label = address.label || 'Alamat';
+    const fullAddress = address.full_address || '';
+    const note = address.note || '';
+    const isDefault = address.is_default !== undefined ? (address.is_default ? 1 : 0) : null;
+
+    if (isDefault === 1) {
+      const ownerRows = await query<any>(
+        'SELECT users_id FROM addresses WHERE id_addresses = ? AND deleted_at IS NULL LIMIT 1',
+        [numericId]
+      );
+      if (ownerRows.length > 0) {
+        await query(
+          'UPDATE addresses SET is_default = 0 WHERE users_id = ? AND deleted_at IS NULL',
+          [ownerRows[0].users_id]
+        );
+      }
+    }
+
+    let sql = 'UPDATE addresses SET label = ?, full_address = ?, note = ?, updated_at = NOW(), update_pic = ?';
+    const params: any[] = [label, fullAddress, note, updatePic || null];
+
+    if (isDefault !== null) {
+      sql += ', is_default = ?';
+      params.push(isDefault);
+    }
+
+    sql += ' WHERE id_addresses = ? AND deleted_at IS NULL';
+    params.push(numericId);
+
+    const res: any = await query(sql, params);
+    return res.affectedRows > 0;
+  }
+
   async softDeleteAddress(id: string | number, deletePic?: number): Promise<boolean> {
     const numericId = CryptoUtil.decryptId(id) ?? id;
+    const addr = await query<any>('SELECT users_id, is_default FROM addresses WHERE id_addresses = ? LIMIT 1', [numericId]);
     const res: any = await query('UPDATE addresses SET deleted_at = NOW(), delete_pic = ? WHERE id_addresses = ?', [deletePic || null, numericId]);
+    if (addr.length > 0 && addr[0].is_default === 1) {
+      await query(
+        'UPDATE addresses SET is_default = 1 WHERE users_id = ? AND deleted_at IS NULL ORDER BY id_addresses DESC LIMIT 1',
+        [addr[0].users_id]
+      );
+    }
     return res.affectedRows > 0;
   }
 }

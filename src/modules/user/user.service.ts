@@ -41,6 +41,17 @@ export class UserService {
     return this.userRepository.addAddress(userId, data, creatorPic || undefined);
   }
 
+  async updateAddress(addressId: string, data: Partial<AddressEntity>, updatePic?: number | null): Promise<boolean> {
+    if (!data.full_address) {
+      throw new Error('Alamat lengkap wajib diisi');
+    }
+    return this.userRepository.updateAddress(addressId, data, updatePic || undefined);
+  }
+
+  async deleteAddress(addressId: string, deletePic?: number | null): Promise<boolean> {
+    return this.userRepository.softDeleteAddress(addressId, deletePic || undefined);
+  }
+
   async updateProfile(userId: string, data: Partial<UserEntity>, updatePic?: number | null): Promise<boolean> {
     return this.userRepository.updateProfile(userId, data, updatePic || undefined);
   }
