@@ -10,5 +10,11 @@ router.put('/profile', authMiddleware, controller.updateProfile);
 router.put('/change-password', authMiddleware, controller.changePassword);
 router.get('/addresses', authMiddleware, controller.getAddresses);
 router.post('/addresses', authMiddleware, controller.addAddress);
+router.put('/addresses/:id', authMiddleware, controller.updateAddress);
+router.delete('/addresses/:id', authMiddleware, controller.deleteAddress);
+router.get('/points/history', authMiddleware, controller.getPointHistories);
+router.post('/points/redeem', authMiddleware, controller.redeemPoints);
+router.get('/wallet/transactions', authMiddleware, controller.getWalletTransactions);
+router.get('/transactions', authMiddleware, controller.getWalletTransactions);
 
 export default router;

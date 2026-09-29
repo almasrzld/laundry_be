@@ -19,8 +19,9 @@ export class NotificationController {
   } {
     const user = req.user;
     let userId: number | null = null;
-    if (user?.id) {
-      userId = CryptoUtil.decryptId(user.id) ?? (typeof user.id === 'number' ? user.id : parseInt(String(user.id), 10) || null);
+    const rawId = user?.id ?? (user as any)?.id_users;
+    if (rawId) {
+      userId = CryptoUtil.decryptId(rawId) ?? (typeof rawId === 'number' ? rawId : parseInt(String(rawId), 10) || null);
     }
     const roleCode = user?.role_code || user?.role || '';
     return { userId, roleCode };

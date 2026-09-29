@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { query } from '../../config/database';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { UserEntity } from '../auth/auth.repository';
-import { isCustomerRole } from '../../utils/role.util';
+import { isCustomerRole, getPermissionsForRole } from '../../utils/role.util';
 
 export interface AddressEntity {
   id?: string | number;
@@ -32,7 +32,7 @@ export interface SecurityQuestionsWithAnswersEntity extends SecurityQuestionsEnt
 }
 
 export class UserRepository {
-  async getProfile(userId: string | number): Promise<(UserEntity & { has_security_questions: boolean; is_customer: boolean; security_questions?: SecurityQuestionsEntity }) | null> {
+  async getProfile(userId: string | number): Promise<(UserEntity & { has_security_questions: boolean; is_customer: boolean; security_questions?: SecurityQuestionsEntity; permissions?: string[] }) | null> {
     const numericId = CryptoUtil.decryptId(userId) ?? userId;
     const results = await query<UserEntity>(
       'SELECT id_users, name_users, email, phone, role_code, status, member_tier, laundry_pay_balance, reward_points, created_at, creator, updated_at, update_pic, deleted_at, delete_pic FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
@@ -43,12 +43,14 @@ export class UserRepository {
 
     const sq = await this.getSecurityQuestions(numericId);
     const isCustomer = await isCustomerRole(user.role_code);
+    const permissions = await getPermissionsForRole(user.role_code);
 
     return {
       ...user,
       has_security_questions: Boolean(sq),
       is_customer: isCustomer,
       security_questions: sq || undefined,
+      permissions,
     };
   }
 
@@ -130,7 +132,7 @@ export class UserRepository {
   async getAddresses(userId: string | number): Promise<AddressEntity[]> {
     const numericId = CryptoUtil.decryptId(userId) ?? userId;
     const results = await query<AddressEntity>(
-      'SELECT id_addresses, users_id, label, full_address, note, is_default, created_at, creator, updated_at, update_pic, deleted_at, delete_pic FROM addresses WHERE users_id = ? AND deleted_at IS NULL',
+      'SELECT id_addresses, users_id, label, full_address, note, is_default, created_at, creator, updated_at, update_pic, deleted_at, delete_pic FROM addresses WHERE users_id = ? AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC, id_addresses DESC',
       [numericId]
     );
     return results;
@@ -143,6 +145,13 @@ export class UserRepository {
     const fullAddress = address.full_address || '';
     const note = address.note || '';
     const isDefault = address.is_default ? 1 : 0;
+
+    if (isDefault === 1) {
+      await query(
+        'UPDATE addresses SET is_default = 0 WHERE users_id = ? AND deleted_at IS NULL',
+        [numericUserId]
+      );
+    }
 
     const res: any = await query(
       'INSERT INTO addresses (users_id, label, full_address, note, is_default, created_at, creator) VALUES (?, ?, ?, ?, ?, NOW(), ?)',
@@ -274,9 +283,196 @@ export class UserRepository {
     return true;
   }
 
-  async softDeleteAddress(id: string | number, deletePic?: number): Promise<boolean> {
+  async updateAddress(id: string | number, address: Partial<AddressEntity>, updatePic?: number): Promise<boolean> {
     const numericId = CryptoUtil.decryptId(id) ?? id;
-    const res: any = await query('UPDATE addresses SET deleted_at = NOW(), delete_pic = ? WHERE id_addresses = ?', [deletePic || null, numericId]);
+    const label = address.label || 'Alamat';
+    const fullAddress = address.full_address || '';
+    const note = address.note || '';
+    const isDefault = address.is_default !== undefined ? (address.is_default ? 1 : 0) : null;
+
+    if (isDefault === 1) {
+      const ownerRows = await query<any>(
+        'SELECT users_id FROM addresses WHERE id_addresses = ? AND deleted_at IS NULL LIMIT 1',
+        [numericId]
+      );
+      if (ownerRows.length > 0) {
+        await query(
+          'UPDATE addresses SET is_default = 0 WHERE users_id = ? AND deleted_at IS NULL',
+          [ownerRows[0].users_id]
+        );
+      }
+    }
+
+    let sql = 'UPDATE addresses SET label = ?, full_address = ?, note = ?, updated_at = NOW(), update_pic = ?';
+    const params: any[] = [label, fullAddress, note, updatePic || null];
+
+    if (isDefault !== null) {
+      sql += ', is_default = ?';
+      params.push(isDefault);
+    }
+
+    sql += ' WHERE id_addresses = ? AND deleted_at IS NULL';
+    params.push(numericId);
+
+    const res: any = await query(sql, params);
     return res.affectedRows > 0;
   }
+
+  async softDeleteAddress(id: string | number, deletePic?: number): Promise<boolean> {
+    const numericId = CryptoUtil.decryptId(id) ?? id;
+    const addr = await query<any>('SELECT users_id, is_default FROM addresses WHERE id_addresses = ? LIMIT 1', [numericId]);
+    const res: any = await query('UPDATE addresses SET deleted_at = NOW(), delete_pic = ? WHERE id_addresses = ?', [deletePic || null, numericId]);
+    if (addr.length > 0 && addr[0].is_default === 1) {
+      await query(
+        'UPDATE addresses SET is_default = 1 WHERE users_id = ? AND deleted_at IS NULL ORDER BY id_addresses DESC LIMIT 1',
+        [addr[0].users_id]
+      );
+    }
+    return res.affectedRows > 0;
+  }
+
+  async addRewardPoints(
+    userId: string | number,
+    points: number,
+    orderId?: string | number | null,
+    title?: string,
+    description?: string
+  ): Promise<boolean> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const numericOrderId = orderId ? (CryptoUtil.decryptId(orderId) ?? Number(orderId)) : null;
+    if (!numericUserId || points <= 0) return false;
+
+    await query(
+      'UPDATE users SET reward_points = COALESCE(reward_points, 0) + ? WHERE id_users = ? AND deleted_at IS NULL',
+      [points, numericUserId]
+    );
+
+    try {
+      await query(
+        `INSERT INTO point_histories (users_id, orders_id, points, type, title, description)
+         VALUES (?, ?, ?, 'earn', ?, ?)`,
+        [
+          numericUserId,
+          numericOrderId,
+          points,
+          title || `Reward Pesanan Selesai (+${points} Poin)`,
+          description || `Poin reward otomatis dari transaksi laundry`,
+        ]
+      );
+    } catch (e) {
+      console.warn('[PointHistory Warning] Gagal menyimpan riwayat poin:', e);
+    }
+
+    return true;
+  }
+
+  async deductRewardPoints(
+    userId: string | number,
+    points: number,
+    title?: string,
+    description?: string
+  ): Promise<boolean> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId || points <= 0) return false;
+
+    const res: any = await query(
+      'UPDATE users SET reward_points = reward_points - ? WHERE id_users = ? AND reward_points >= ? AND deleted_at IS NULL',
+      [points, numericUserId, points]
+    );
+
+    if (res.affectedRows > 0) {
+      try {
+        await query(
+          `INSERT INTO point_histories (users_id, points, type, title, description)
+           VALUES (?, ?, 'redeem', ?, ?)`,
+          [
+            numericUserId,
+            points,
+            title || `Penukaran Poin (-${points} Poin)`,
+            description || `Poin ditukarkan dengan voucher diskon`,
+          ]
+        );
+      } catch (e) {
+        console.warn('[PointHistory Warning] Gagal menyimpan riwayat penukaran poin:', e);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  async getPointHistories(userId: string | number): Promise<PointHistoryEntity[]> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId) return [];
+
+    try {
+      const rows = await query<any>(
+        'SELECT id_point_histories, users_id, orders_id, points, type, title, description, created_at FROM point_histories WHERE users_id = ? ORDER BY id_point_histories DESC LIMIT 50',
+        [numericUserId]
+      );
+      return rows.map(r => ({
+        ...r,
+        id: CryptoUtil.encryptId(r.id_point_histories) ?? String(r.id_point_histories),
+        user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+        order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+      }));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  async getWalletTransactions(userId: string | number, limit: number = 50): Promise<any[]> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId) return [];
+
+    try {
+      const rows = await query<any>(
+        `SELECT 
+           wt.id_wallet_transactions,
+           wt.users_id,
+           wt.orders_id,
+           wt.type,
+           wt.category,
+           wt.amount,
+           wt.balance_before,
+           wt.balance_after,
+           wt.title,
+           wt.description,
+           wt.reference_no,
+           wt.created_at,
+           o.invoice_no
+         FROM wallet_transactions wt
+         LEFT JOIN orders o ON wt.orders_id = o.id_orders
+         WHERE wt.users_id = ?
+         ORDER BY wt.created_at DESC, wt.id_wallet_transactions DESC
+         LIMIT ?`,
+        [numericUserId, Number(limit) || 50]
+      );
+
+      return rows.map(r => ({
+        ...r,
+        id: CryptoUtil.encryptId(r.id_wallet_transactions) ?? String(r.id_wallet_transactions),
+        user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+        order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+        amount: Number(r.amount) || 0,
+        balance_before: Number(r.balance_before) || 0,
+        balance_after: Number(r.balance_after) || 0,
+      }));
+    } catch (_) {
+      return [];
+    }
+  }
+}
+
+export interface PointHistoryEntity {
+  id?: number | string;
+  id_point_histories?: number | string;
+  user_id?: number | string;
+  users_id?: number | string;
+  order_id?: number | string | null;
+  orders_id?: number | string | null;
+  points: number;
+  type: 'earn' | 'redeem';
+  title: string;
+  description?: string | null;
+  created_at?: Date | string;
 }

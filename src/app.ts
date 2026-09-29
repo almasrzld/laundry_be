@@ -48,7 +48,7 @@ app.get('/', (req, res) => {
 app.use(errorHandler);
 
 // Start Server
-if (process.env.NODE_ENV !== 'test') {
+if (ENV.NODE_ENV !== 'test') {
   app.listen(ENV.PORT, async () => {
     console.log(pc.cyan('┌─────────────────────────────────────────────────────────┐'));
     console.log(pc.cyan('│') + ' ' + pc.bold(pc.green('● [SERVER]')) + ' ' + pc.bold('Laundry App Backend is RUNNING').padEnd(43) + pc.cyan('│'));

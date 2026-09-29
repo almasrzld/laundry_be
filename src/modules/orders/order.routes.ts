@@ -13,5 +13,7 @@ router.put('/:id', authMiddleware, controller.updateOrder);
 router.patch('/:id', authMiddleware, controller.updateOrder);
 router.patch('/:id/status', authMiddleware, controller.updateStatus);
 router.put('/:id/status', authMiddleware, controller.updateStatus);
+router.post('/:id/rating', authMiddleware, controller.submitRating);
+router.post('/:id/review', authMiddleware, controller.submitRating);
 
 export default router;

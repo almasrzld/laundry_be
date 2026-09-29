@@ -2,6 +2,8 @@ import { OrderRepository, OrderEntity, TimelineStepEntity } from './order.reposi
 import { CryptoUtil } from '../../utils/crypto.util';
 import { InvoiceGeneratorUtil } from '../../utils/invoice-generator.util';
 import { NotificationService } from '../notifications/notification.service';
+import { UserRepository } from '../user/user.repository';
+import { query } from '../../config/database';
 
 export class OrderService {
   private orderRepository: OrderRepository;
@@ -55,12 +57,24 @@ export class OrderService {
         }
       : null;
 
+    const customerName = o.customer_name ?? o.user_name ?? null;
+    const customerPhone = o.customer_phone ?? o.user_phone ?? null;
+    const customerEmail = o.customer_email ?? o.user_email ?? null;
+    const customerTier = o.customer_member_tier ?? null;
+
     return {
       ...o,
       id_orders: rawId,
       id: CryptoUtil.encryptId(rawId) ?? String(rawId),
       users_id: rawUserId ?? undefined,
       user_id: rawUserId ? (CryptoUtil.encryptId(rawUserId) ?? String(rawUserId)) : undefined,
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      customer_email: customerEmail,
+      customer_member_tier: customerTier,
+      user_name: customerName,
+      user_phone: customerPhone,
+      user_email: customerEmail,
       order_statuses_id: rawStatusId,
       status_id: encryptedStatusId,
       status: o.status_name || o.status,
@@ -69,8 +83,8 @@ export class OrderService {
     };
   }
 
-  async getOrders(filter?: 'active' | 'history'): Promise<OrderEntity[]> {
-    const list = await this.orderRepository.findAll(filter);
+  async getOrders(filter?: 'active' | 'history', userId?: string | number): Promise<OrderEntity[]> {
+    const list = await this.orderRepository.findAll(filter, userId);
     return list.map((o) => this.formatOrder(o));
   }
 
@@ -201,6 +215,9 @@ export class OrderService {
       console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
     }
 
+    // 4. Trigger Reward Points: Otomatis jika status Pesanan Selesai
+    await this.awardRewardPointsIfCompleted(updated, existingOrder?.status);
+
     return this.formatOrder(updated);
   }
 
@@ -215,29 +232,169 @@ export class OrderService {
       throw new Error('Gagal memperbarui status pesanan');
     }
 
-    // 3. Trigger Notifikasi: Status Cucian Selesai / Siap Diantar (Ke Pelanggan)
+    // 3. Trigger Notifikasi: Status Cucian Diperbarui (Ke Pelanggan Real-Time)
     try {
       const updatedOrder = await this.orderRepository.findById(id);
       if (updatedOrder) {
         const newStatus = updatedOrder.status || '';
         const oldStatus = existingOrder?.status || '';
-        const isReadyOrCompleted =
-          newStatus.toLowerCase().includes('siap diantar') ||
-          newStatus.toLowerCase().includes('selesai') ||
-          newStatus.toLowerCase().includes('antar');
 
-        if (isReadyOrCompleted && newStatus !== oldStatus) {
-          await this.notificationService.notifyOrderStatusReady({
+        if (newStatus !== oldStatus) {
+          await this.notificationService.notifyOrderStatusChanged({
             order: updatedOrder,
             statusName: newStatus,
+            previousStatus: oldStatus,
             creatorPic: updatePic || null,
           });
         }
+
+        // 4. Trigger Reward Points: Otomatis jika status Pesanan Selesai
+        await this.awardRewardPointsIfCompleted(updatedOrder, existingOrder?.status);
       }
     } catch (notifErr) {
-      console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
+      console.warn('[Notification Warning] Gagal membuat notifikasi perubahan status:', notifErr);
     }
 
     return { success: true, message: `Status pesanan berhasil diperbarui` };
+  }
+
+  private async awardRewardPointsIfCompleted(order: OrderEntity, previousStatus?: string): Promise<void> {
+    try {
+      const currentStatus = (order.status || '').toLowerCase();
+      const prevStatus = (previousStatus || '').toLowerCase();
+      const isCompleted = currentStatus.includes('selesai');
+      const wasAlreadyCompleted = prevStatus.includes('selesai');
+
+      if (!isCompleted || wasAlreadyCompleted) return;
+
+      const rawUserId = order.users_id || order.user_id;
+      if (!rawUserId) return;
+
+      const numericOrderId = order.id_orders || order.id;
+
+      // Hitung total belanja pesanan: (qty * price) + delivery - discount
+      const totalAmount = Math.max(
+        0,
+        Math.round(
+          (Number(order.quantity) || 1) * (Number(order.price_per_unit) || 0) +
+          (Number(order.delivery_fee) || 0) -
+          (Number(order.discount) || 0)
+        )
+      );
+
+      // Formula Reward: 1 Poin per Rp 1.000 transaksi riil
+      const earnedPoints = Math.floor(totalAmount / 1000);
+      if (earnedPoints <= 0) return;
+
+      const userRepository = new UserRepository();
+      await userRepository.addRewardPoints(
+        rawUserId,
+        earnedPoints,
+        numericOrderId,
+        `Reward Pesanan #${order.invoice_no} (+${earnedPoints} Poin)`,
+        `Pesanan ${order.service_name} telah selesai. Poin reward otomatis ditambahkan ke akun Anda!`
+      );
+    } catch (e: any) {
+      console.warn('[Reward Points Warning] Gagal memberikan poin reward otomatis:', e.message);
+    }
+  }
+
+  async submitRating(
+    id: string | number,
+    data: { rating: number; review?: string; tip_amount?: number; userId?: number | null }
+  ): Promise<boolean> {
+    const existingOrder = await this.orderRepository.findById(String(id));
+    if (!existingOrder) {
+      throw new Error('Pesanan laundry tidak ditemukan');
+    }
+
+    // Validasi kepemilikan: Hanya pelanggan pemilik pesanan yang berhak memberikan penilaian & tips
+    const rawOrderOwnerId = existingOrder.users_id 
+      ? Number(existingOrder.users_id) 
+      : (existingOrder.user_id ? Number(CryptoUtil.decryptId(existingOrder.user_id) ?? existingOrder.user_id) : null);
+
+    if (data.userId && rawOrderOwnerId && Number(data.userId) !== rawOrderOwnerId) {
+      throw new Error('Hanya pelanggan pemilik pesanan ini yang dapat memberikan ulasan dan rating.');
+    }
+
+    const prevTip = Number(existingOrder?.tip_amount) || 0;
+    const newTip = Math.max(0, Number(data.tip_amount) || 0);
+    const tipDelta = newTip - prevTip;
+
+    const result = await this.orderRepository.submitRating(id, data);
+
+    // Jika ada tips (atau perubahan nilai tips) dan pesanan memiliki kurir bertugas
+    if (result && tipDelta !== 0 && existingOrder) {
+      try {
+        let courierUserId: number | null = null;
+        if (existingOrder.courier_users_id || existingOrder.courier_user_id) {
+          courierUserId = Number(existingOrder.courier_users_id ?? existingOrder.courier_user_id);
+        } else {
+          const cleanPhone = (existingOrder.courier_phone || '').replace(/[^0-9]/g, '');
+          const courierName = (existingOrder.courier_name || '').trim();
+          if (courierName.length > 0 || cleanPhone.length > 0) {
+            const courierRows = await query<any>(
+              `SELECT id_users FROM users 
+               WHERE ((phone IS NOT NULL AND phone != '' AND REPLACE(REPLACE(phone, '-', ''), ' ', '') = ?) OR (LOWER(name_users) = LOWER(?)))
+                 AND deleted_at IS NULL 
+               LIMIT 1`,
+              [cleanPhone, courierName]
+            );
+            if (courierRows && courierRows.length > 0) {
+              courierUserId = Number(courierRows[0].id_users);
+            }
+          }
+        }
+
+        if (courierUserId) {
+          // Dapatkan saldo kurir saat ini untuk mutasi
+          const userBalRes = await query<any>('SELECT laundry_pay_balance FROM users WHERE id_users = ?', [courierUserId]);
+          const currentBal = userBalRes && userBalRes.length > 0 ? (Number(userBalRes[0].laundry_pay_balance) || 0) : 0;
+          const nextBal = currentBal + tipDelta;
+
+          // 1. Otomatis tambahkan tips ke saldo LaundryPay kurir
+          await query(
+            'UPDATE users SET laundry_pay_balance = GREATEST(0, COALESCE(laundry_pay_balance, 0) + ?) WHERE id_users = ?',
+            [tipDelta, courierUserId]
+          );
+
+          // 2. Simpan ke riwayat transaksi dompet (wallet_transactions)
+          if (tipDelta > 0) {
+            const customerName = (existingOrder as any).customer_name || (existingOrder as any).user_name || 'Pelanggan';
+            try {
+              await query(`
+                INSERT INTO wallet_transactions 
+                  (users_id, orders_id, type, category, amount, balance_before, balance_after, title, description, reference_no)
+                VALUES (?, ?, 'credit', 'tip', ?, ?, ?, ?, ?, ?)
+              `, [
+                courierUserId,
+                existingOrder.id_orders ?? existingOrder.id,
+                tipDelta,
+                currentBal,
+                nextBal,
+                'Tips Pengantaran Pesanan',
+                `Tips sebesar Rp ${tipDelta.toLocaleString('id-ID')} dari ${customerName} untuk pesanan #${existingOrder.invoice_no}`,
+                existingOrder.invoice_no
+              ]);
+            } catch (txErr: any) {
+              console.warn('[WalletTransaction Warning] Gagal mencatat mutasi tips kurir:', txErr?.message || txErr);
+            }
+
+            // 3. Kirim notifikasi tips masuk ke akun kurir
+            await this.notificationService.notifyCourierTipReceived({
+              courierUserId,
+              orderId: existingOrder.id_orders ?? existingOrder.id,
+              invoiceNo: existingOrder.invoice_no,
+              tipAmount: tipDelta,
+              customerName,
+            });
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Courier Tip Warning] Gagal mengkreditkan saldo tips ke kurir:', err?.message || err);
+      }
+    }
+
+    return result;
   }
 }

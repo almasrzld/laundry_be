@@ -48,7 +48,21 @@ export interface OrderEntity {
   delivery_address: string;
   courier_name: string;
   courier_phone: string;
+  courier_users_id?: number | string | null;
+  courier_user_id?: number | string | null;
   notes: string;
+  rating?: number | null;
+  review?: string | null;
+  tip_amount?: number;
+  rated_at?: Date | string | null;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  customer_member_tier?: string | null;
+  customer_role_code?: string | null;
+  user_name?: string | null;
+  user_email?: string | null;
+  user_phone?: string | null;
   timeline?: TimelineStepEntity[];
   created_at?: Date | string;
   creator?: number;
@@ -70,6 +84,12 @@ const ORDER_SELECT = `
   COALESCE(mos.step_order, 1) AS status_step_order,
   o.quantity, o.unit, o.price_per_unit, o.delivery_fee, o.discount, 
   o.pickup_address, o.delivery_address, o.courier_name, o.courier_phone, o.notes, 
+  o.rating, o.review, o.tip_amount, o.rated_at,
+  u.name_users AS customer_name,
+  u.email AS customer_email,
+  u.phone AS customer_phone,
+  u.member_tier AS customer_member_tier,
+  u.role_code AS customer_role_code,
   o.created_at, o.creator, o.updated_at, o.update_pic, o.deleted_at, o.delete_pic
 `;
 
@@ -189,15 +209,24 @@ export class OrderRepository {
     });
   }
 
-  async findAll(statusFilter?: 'active' | 'history'): Promise<OrderEntity[]> {
-    const sql = `
+  async findAll(statusFilter?: 'active' | 'history', userId?: string | number): Promise<OrderEntity[]> {
+    let sql = `
       SELECT ${ORDER_SELECT} 
       FROM orders o
       LEFT JOIN master_order_statuses mos ON o.order_statuses_id = mos.id_order_statuses AND mos.deleted_at IS NULL
-      WHERE o.deleted_at IS NULL 
-      ORDER BY o.order_date DESC
+      LEFT JOIN users u ON o.users_id = u.id_users AND u.deleted_at IS NULL
+      WHERE o.deleted_at IS NULL
     `;
-    const orders = await query<OrderEntity>(sql);
+    const params: any[] = [];
+
+    if (userId !== undefined && userId !== null && String(userId).trim() !== '') {
+      const numericUserId = CryptoUtil.decryptId(userId) ?? userId;
+      sql += ' AND o.users_id = ?';
+      params.push(numericUserId);
+    }
+
+    sql += ' ORDER BY o.order_date DESC';
+    const orders = await query<OrderEntity>(sql, params);
 
     for (const order of orders) {
       const stepOrder = Number(order.status_step_order) || 1;
@@ -224,6 +253,7 @@ export class OrderRepository {
       SELECT ${ORDER_SELECT} 
       FROM orders o
       LEFT JOIN master_order_statuses mos ON o.order_statuses_id = mos.id_order_statuses AND mos.deleted_at IS NULL
+      LEFT JOIN users u ON o.users_id = u.id_users AND u.deleted_at IS NULL
       WHERE o.id_orders = ? AND o.deleted_at IS NULL 
       LIMIT 1
       `,
@@ -393,5 +423,29 @@ export class OrderRepository {
     await query('UPDATE orders SET deleted_at = NOW(), delete_pic = ? WHERE id_orders = ?', [deletePic || null, numericId]);
     await query('UPDATE order_timelines SET deleted_at = NOW(), delete_pic = ? WHERE orders_id = ?', [deletePic || null, numericId]);
     return true;
+  }
+
+  async submitRating(
+    id: string | number,
+    data: { rating: number; review?: string; tip_amount?: number; userId?: number | null }
+  ): Promise<boolean> {
+    const numericId = CryptoUtil.decryptId(id) ?? Number(id);
+    let sql = `
+      UPDATE orders 
+      SET 
+        rating = ?,
+        review = ?,
+        tip_amount = ?,
+        rated_at = NOW(),
+        updated_at = NOW()
+      WHERE id_orders = ?
+    `;
+    const params: any[] = [data.rating, data.review || null, data.tip_amount || 0, numericId];
+    if (data.userId) {
+      sql += ' AND users_id = ?';
+      params.push(data.userId);
+    }
+    const res: any = await query(sql, params);
+    return Boolean(res && res.affectedRows > 0);
   }
 }

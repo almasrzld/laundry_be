@@ -41,6 +41,17 @@ export class UserService {
     return this.userRepository.addAddress(userId, data, creatorPic || undefined);
   }
 
+  async updateAddress(addressId: string, data: Partial<AddressEntity>, updatePic?: number | null): Promise<boolean> {
+    if (!data.full_address) {
+      throw new Error('Alamat lengkap wajib diisi');
+    }
+    return this.userRepository.updateAddress(addressId, data, updatePic || undefined);
+  }
+
+  async deleteAddress(addressId: string, deletePic?: number | null): Promise<boolean> {
+    return this.userRepository.softDeleteAddress(addressId, deletePic || undefined);
+  }
+
   async updateProfile(userId: string, data: Partial<UserEntity>, updatePic?: number | null): Promise<boolean> {
     return this.userRepository.updateProfile(userId, data, updatePic || undefined);
   }
@@ -60,4 +71,46 @@ export class UserService {
     }
     return this.userRepository.changePassword(userId, oldPass, newPass, updatePic || undefined, securityQuestions);
   }
+
+  async getPointHistories(userId: string) {
+    return this.userRepository.getPointHistories(userId);
+  }
+
+  async redeemPoints(userId: string, points: number, title?: string, description?: string) {
+    if (!points || points <= 0) {
+      throw new Error('Jumlah poin yang ditukarkan harus lebih dari 0');
+    }
+
+    const profile = await this.userRepository.getProfile(userId);
+    if (!profile) {
+      throw new Error('Pengguna tidak ditemukan');
+    }
+
+    const currentPoints = profile.reward_points || 0;
+    if (currentPoints < points) {
+      throw new Error(`Poin Anda tidak mencukupi (Poin Anda: ${currentPoints}, Dibutuhkan: ${points})`);
+    }
+
+    const success = await this.userRepository.deductRewardPoints(
+      userId,
+      points,
+      title || `Tukar Voucher Diskon (-${points} Poin)`,
+      description || `Penukaran ${points} poin dengan voucher diskon Almas Laundry`
+    );
+
+    if (!success) {
+      throw new Error('Gagal menukarkan poin, silakan coba kembali');
+    }
+
+    return {
+      success: true,
+      message: `Selamat! Berhasil menukarkan ${points} poin reward`,
+      remaining_points: currentPoints - points,
+    };
+  }
+
+  async getWalletTransactions(userId: string, limit?: number) {
+    return this.userRepository.getWalletTransactions(userId, limit);
+  }
 }
+

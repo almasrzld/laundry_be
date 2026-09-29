@@ -58,6 +58,28 @@ export class UserController {
     }
   };
 
+  updateAddress = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const addressId = req.params.id;
+      const picId = getPicId(req);
+      await this.userService.updateAddress(addressId, req.body, picId);
+      sendSuccess(res, null, 'Alamat penjemputan berhasil diperbarui');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal memperbarui alamat', 400);
+    }
+  };
+
+  deleteAddress = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const addressId = req.params.id;
+      const picId = getPicId(req);
+      await this.userService.deleteAddress(addressId, picId);
+      sendSuccess(res, null, 'Alamat berhasil dihapus');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menghapus alamat', 400);
+    }
+  };
+
   updateProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const userId = req.user?.id;
@@ -94,4 +116,49 @@ export class UserController {
       sendError(res, error.message || 'Gagal memperbarui password', 400);
     }
   };
+
+  getPointHistories = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const list = await this.userService.getPointHistories(String(userId));
+      sendSuccess(res, list, 'Riwayat poin reward berhasil diambil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengambil riwayat poin', 400);
+    }
+  };
+
+  redeemPoints = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const { points, title, description } = req.body;
+      const result = await this.userService.redeemPoints(String(userId), Number(points), title, description);
+      sendSuccess(res, result, result.message);
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menukarkan poin', 400);
+    }
+  };
+
+  getWalletTransactions = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const limit = req.query.limit ? Number(req.query.limit) : 50;
+      const list = await this.userService.getWalletTransactions(String(userId), limit);
+      sendSuccess(res, list, 'Riwayat mutasi saldo LaundryPay berhasil diambil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengambil riwayat transaksi', 400);
+    }
+  };
 }
+

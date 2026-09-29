@@ -1,9 +1,10 @@
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { AuthRepository, UserEntity } from './auth.repository';
 import { UserRepository } from '../user/user.repository';
 import { ENV } from '../../config/env';
-import { isCustomerRole } from '../../utils/role.util';
+import { isCustomerRole, getPermissionsForRole } from '../../utils/role.util';
 
 export class AuthError extends Error {
   statusCode: number;
@@ -164,6 +165,10 @@ export class AuthService {
     // 4. Jika login berhasil, reset semua counter lockout
     await this.authRepository.resetLockout(user.id_users || user.id!);
 
+    // 5. Generate session_id unik untuk single-active-session (1 user = 1 sesi aktif)
+    const sessionId = crypto.randomUUID();
+    await this.authRepository.updateActiveSession(user.id_users || user.id!, sessionId);
+
     let userCode: number | null = null;
     try {
       const { UserCodeUtil } = await import('../../utils/user-code.util');
@@ -177,6 +182,7 @@ export class AuthService {
         name: user.name,
         role_code: user.role_code || 'customer',
         role: user.role_code || 'customer',
+        session_id: sessionId,
         user_code: userCode ? String(userCode) : undefined,
         created_at: user.created_at,
       },
@@ -185,11 +191,13 @@ export class AuthService {
     );
 
     const { password: _, ...userWithoutPassword } = user;
+    const permissions = await getPermissionsForRole(user.role_code);
 
     return {
       token,
       user: {
         ...userWithoutPassword,
+        permissions,
         ...(userCode ? { user_code: String(userCode) } : {}),
       },
     };
@@ -216,20 +224,35 @@ export class AuthService {
       reward_points: 100,
     });
 
+    const sessionId = crypto.randomUUID();
+    await this.authRepository.updateActiveSession(newUser.id_users || newUser.id!, sessionId);
+
     const token = jwt.sign(
       {
         id: newUser.id,
         email: newUser.email,
         name: newUser.name,
+        role_code: newUser.role_code || 'customer',
+        role: newUser.role_code || 'customer',
+        session_id: sessionId,
       },
       ENV.JWT_SECRET,
       { expiresIn: '30d' }
     );
 
+    const permissions = await getPermissionsForRole(newUser.role_code);
+
     return {
       token,
-      user: newUser,
+      user: {
+        ...newUser,
+        permissions,
+      },
     };
+  }
+
+  async logout(userId: string | number): Promise<void> {
+    await this.authRepository.updateActiveSession(userId, null);
   }
 
   async getMe(userId: string): Promise<UserEntity | null> {

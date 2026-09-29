@@ -61,6 +61,18 @@ export class AuthController {
     }
   };
 
+  logout = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (userId) {
+        await this.authService.logout(String(userId));
+      }
+      sendSuccess(res, null, 'Logout berhasil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal logout', 500);
+    }
+  };
+
   checkForgotPassword = async (req: Request, res: Response): Promise<void> => {
     try {
       const { identifier } = req.body;

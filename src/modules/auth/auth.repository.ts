@@ -17,6 +17,8 @@ export interface UserEntity {
   lockout_stage?: number;
   locked_until?: Date | string | null;
   is_permanently_locked?: number | boolean;
+  active_session_id?: string | null;
+  permissions?: string[];
   created_at?: Date | string;
   creator?: number | null;
   updated_at?: Date | string;
@@ -29,7 +31,7 @@ export class AuthRepository {
   private baseSelect = `
     SELECT id_users, name_users, email, phone, password, role_code, member_tier,
            laundry_pay_balance, reward_points, failed_login_attempts, lockout_stage,
-           locked_until, is_permanently_locked, created_at, creator, updated_at,
+           locked_until, is_permanently_locked, active_session_id, created_at, creator, updated_at,
            update_pic, deleted_at, delete_pic
     FROM users
   `;
@@ -161,6 +163,25 @@ export class AuthRepository {
       [numericId]
     );
     return res.affectedRows > 0;
+  }
+
+  async updateActiveSession(id: string | number, sessionId: string | null): Promise<boolean> {
+    const numericId = CryptoUtil.decryptId(id) ?? id;
+    const res: any = await query(
+      'UPDATE users SET active_session_id = ?, updated_at = NOW() WHERE id_users = ?',
+      [sessionId, numericId]
+    );
+    return res.affectedRows > 0;
+  }
+
+  async getActiveSession(id: string | number): Promise<string | null> {
+    const numericId = CryptoUtil.decryptId(id) ?? id;
+    const results = await query<UserEntity>(
+      'SELECT active_session_id FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+      [numericId]
+    );
+    if (results.length === 0) return null;
+    return results[0].active_session_id || null;
   }
 
   async softDelete(id: string | number, deletePic?: number): Promise<boolean> {

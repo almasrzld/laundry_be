@@ -95,3 +95,26 @@ export async function isAdminOrStaffRole(roleCode?: string | null): Promise<bool
   if (isCour) return false;
   return true;
 }
+
+/**
+ * Mengambil daftar kode hak akses (permissions) aktif untuk suatu role secara dinamis dari database.
+ */
+export async function getPermissionsForRole(roleCode?: string | null): Promise<string[]> {
+  if (!roleCode || roleCode.trim() === '') return [];
+  const clean = roleCode.trim().toLowerCase();
+  try {
+    const rows = await query<{ code: string }>(
+      `SELECT DISTINCT p.code 
+       FROM role_permissions rp
+       JOIN permissions p ON rp.permissions_id = p.id_permissions
+       JOIN roles r ON rp.roles_id = r.id_roles
+       WHERE (LOWER(r.code) = LOWER(?) OR LOWER(r.name_roles) = LOWER(?) OR r.id_roles = ?)
+         AND rp.deleted_at IS NULL AND p.deleted_at IS NULL AND r.deleted_at IS NULL`,
+      [clean, clean, clean]
+    );
+    return (rows || []).map((r) => r.code);
+  } catch (err) {
+    console.warn('[RoleUtil Warning] Gagal memuat permissions untuk role:', roleCode, err);
+    return [];
+  }
+}
