@@ -7,6 +7,7 @@ const controller = new AuthController();
 
 router.post('/login', controller.login);
 router.post('/register', controller.register);
+router.post('/logout', authMiddleware, controller.logout);
 router.get('/me', authMiddleware, controller.me);
 
 // Lupa Password via Pertanyaan Keamanan (Khusus Role Pelanggan)

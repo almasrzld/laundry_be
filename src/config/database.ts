@@ -61,6 +61,15 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
       console.warn('  ▲ [Migration Info] point_histories table check:', e.message);
     }
 
+    // Auto-add active_session_id column to users if not exists
+    try {
+      await connection.query(`
+        ALTER TABLE users ADD COLUMN active_session_id VARCHAR(100) NULL DEFAULT NULL;
+      `);
+    } catch (_) {
+      // Column already exists
+    }
+
     // Auto-add reward_points_awarded column to orders if not exists
     try {
       await connection.query(`
