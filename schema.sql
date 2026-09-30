@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS `user_security_questions` (
   `question_2` VARCHAR(255) NOT NULL,
   `answer_2` VARCHAR(255) NOT NULL,
   `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-  `creator` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `creator` BIGINT UNSIGNED NOT NULL,
   `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
   `update_pic` BIGINT UNSIGNED NULL,
   `deleted_at` DATETIME NULL,
@@ -388,4 +388,47 @@ CREATE TABLE IF NOT EXISTS `icons` (
   `update_pic` BIGINT UNSIGNED NULL,
   `deleted_at` DATETIME NULL,
   `delete_pic` BIGINT UNSIGNED NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 20. TABEL POINT_HISTORIES
+CREATE TABLE IF NOT EXISTS `point_histories` (
+  `id_point_histories` INT AUTO_INCREMENT PRIMARY KEY,
+  `users_id` INT NOT NULL,
+  `orders_id` INT NULL,
+  `points` INT NOT NULL,
+  `type` VARCHAR(20) NOT NULL DEFAULT 'earn',
+  `title` VARCHAR(150) NOT NULL,
+  `description` VARCHAR(255) NULL,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `creator` BIGINT UNSIGNED NOT NULL,
+  `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+  `update_pic` BIGINT UNSIGNED NULL,
+  `deleted_at` DATETIME NULL,
+  `delete_pic` BIGINT UNSIGNED NULL,
+  INDEX `idx_point_users` (`users_id`),
+  FOREIGN KEY (`users_id`) REFERENCES `users`(`id_users`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 21. TABEL PAYMENT_TRANSACTIONS (XENDIT / QRIS)
+CREATE TABLE IF NOT EXISTS `payment_transactions` (
+  `id_payment_transactions` INT AUTO_INCREMENT PRIMARY KEY,
+  `orders_id` INT NOT NULL,
+  `reference_id` VARCHAR(100) NOT NULL,
+  `qr_id` VARCHAR(100) NULL,
+  `qr_string` TEXT NULL,
+  `amount` INT NOT NULL,
+  `payment_method` VARCHAR(50) NOT NULL DEFAULT 'QRIS',
+  `status` VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+  `expires_at` DATETIME NULL,
+  `paid_at` DATETIME NULL,
+  `payload` TEXT NULL,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `creator` BIGINT UNSIGNED NOT NULL,
+  `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+  `update_pic` BIGINT UNSIGNED NULL,
+  `deleted_at` DATETIME NULL,
+  `delete_pic` BIGINT UNSIGNED NULL,
+  INDEX `idx_pay_orders` (`orders_id`),
+  INDEX `idx_pay_ref` (`reference_id`),
+  FOREIGN KEY (`orders_id`) REFERENCES `orders`(`id_orders`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

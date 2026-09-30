@@ -54,9 +54,29 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
           title VARCHAR(150) NOT NULL,
           description VARCHAR(255) NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          creator BIGINT UNSIGNED NOT NULL,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          update_pic BIGINT UNSIGNED NULL,
+          deleted_at DATETIME NULL,
+          delete_pic BIGINT UNSIGNED NULL,
           INDEX idx_point_users (users_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
       `);
+      try {
+        await connection.query(`ALTER TABLE point_histories ADD COLUMN creator BIGINT UNSIGNED NOT NULL AFTER created_at`);
+      } catch (_) {}
+      try {
+        await connection.query(`ALTER TABLE point_histories ADD COLUMN updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP AFTER creator`);
+      } catch (_) {}
+      try {
+        await connection.query(`ALTER TABLE point_histories ADD COLUMN update_pic BIGINT UNSIGNED NULL AFTER updated_at`);
+      } catch (_) {}
+      try {
+        await connection.query(`ALTER TABLE point_histories ADD COLUMN deleted_at DATETIME NULL AFTER update_pic`);
+      } catch (_) {}
+      try {
+        await connection.query(`ALTER TABLE point_histories ADD COLUMN delete_pic BIGINT UNSIGNED NULL AFTER deleted_at`);
+      } catch (_) {}
     } catch (e: any) {
       console.warn('  ▲ [Migration Info] point_histories table check:', e.message);
     }

@@ -19,4 +19,9 @@ export const ENV = {
   DB_DATABASE: CryptoUtil.decryptEnvValue(process.env.DB_DATABASE),
   DB_USERNAME: CryptoUtil.decryptEnvValue(process.env.DB_USERNAME),
   DB_PASSWORD: CryptoUtil.decryptEnvValue(process.env.DB_PASSWORD),
+
+  // Xendit Payment Gateway Configurations
+  XENDIT_SECRET_KEY: process.env.XENDIT_SECRET_KEY ?? '',
+  XENDIT_WEBHOOK_VERIFICATION_TOKEN: process.env.XENDIT_WEBHOOK_VERIFICATION_TOKEN ?? '',
 };
+

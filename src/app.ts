@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import pc from 'picocolors';
 import { ENV } from './config/env';
 import { testDatabaseConnection } from './config/database';
@@ -15,6 +16,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static uploaded files (Payment proofs, avatars, etc.)
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Global optional authentication (populates req.user if Bearer token present)
 app.use(optionalAuthMiddleware);

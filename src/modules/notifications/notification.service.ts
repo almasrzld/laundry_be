@@ -306,7 +306,7 @@ export class NotificationService {
       maximumFractionDigits: 0,
     }).format(params.tipAmount);
 
-    const title = '🎉 Anda Menerima Tips!';
+    const title = 'Anda Menerima Tips';
     const message = params.customerName
       ? `Selamat! ${params.customerName} memberikan tips sebesar ${formattedTip} untuk pesanan #${params.invoiceNo || ''}. Saldo LaundryPay Anda telah otomatis bertambah!`
       : `Selamat! Anda menerima tips sebesar ${formattedTip} untuk pesanan #${params.invoiceNo || ''}. Saldo LaundryPay Anda telah otomatis bertambah!`;
@@ -325,4 +325,81 @@ export class NotificationService {
       },
     });
   }
+
+  // 4. Notifikasi Pembayaran Berhasil (Ditujukan langsung ke Pelanggan via users_id)
+  async notifyPaymentSuccess(params: {
+    order: {
+      id_orders?: number | string;
+      id?: number | string;
+      invoice_no?: string;
+      users_id?: number | string | null;
+      user_id?: number | string | null;
+      service_name?: string;
+    };
+    amount: number;
+    paymentMethod?: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const { order, amount, paymentMethod = 'QRIS', creatorPic } = params;
+    const rawOrderId = order.id_orders ? (CryptoUtil.decryptId(order.id_orders) ?? Number(order.id_orders)) : CryptoUtil.decryptId(order.id);
+    const rawCustomerUserId = order.users_id ? (CryptoUtil.decryptId(order.users_id) ?? Number(order.users_id)) : (order.user_id ? CryptoUtil.decryptId(order.user_id) : null);
+    const invoiceNo = order.invoice_no || '';
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(amount);
+
+    if (rawCustomerUserId) {
+      await this.notificationRepository.create({
+        users_id: rawCustomerUserId,
+        orders_id: rawOrderId,
+        title: 'Pembayaran Berhasil Diterima',
+        message: `Pembayaran sebesar ${formattedAmount} untuk pesanan #${invoiceNo} (${order.service_name || 'Laundry'}) via ${paymentMethod} telah berhasil diverifikasi. Pesanan Anda akan segera diproses!`,
+        type: 'payment_success',
+        target_role: null,
+        data: {
+          invoice_no: invoiceNo,
+          amount,
+          payment_method: paymentMethod,
+        },
+        created_pic: creatorPic || null,
+      });
+    }
+  }
+
+  // 5. Notifikasi Pembayaran Kadaluarsa / Pesanan Dibatalkan (Ditujukan langsung ke Pelanggan via users_id)
+  async notifyPaymentExpired(params: {
+    order: {
+      id_orders?: number | string;
+      id?: number | string;
+      invoice_no?: string;
+      users_id?: number | string | null;
+      user_id?: number | string | null;
+    };
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const { order, creatorPic } = params;
+    const rawOrderId = order.id_orders ? (CryptoUtil.decryptId(order.id_orders) ?? Number(order.id_orders)) : CryptoUtil.decryptId(order.id);
+    const rawCustomerUserId = order.users_id ? (CryptoUtil.decryptId(order.users_id) ?? Number(order.users_id)) : (order.user_id ? CryptoUtil.decryptId(order.user_id) : null);
+    const invoiceNo = order.invoice_no || '';
+
+    if (rawCustomerUserId) {
+      await this.notificationRepository.create({
+        users_id: rawCustomerUserId,
+        orders_id: rawOrderId,
+        title: 'Batas Waktu Pembayaran Berakhir',
+        message: `Batas waktu pembayaran untuk pesanan #${invoiceNo} telah berakhir dan pesanan telah dibatalkan secara otomatis. Anda dapat melakukan pemesanan ulang kapan saja.`,
+        type: 'order_cancelled',
+        target_role: null,
+        data: {
+          invoice_no: invoiceNo,
+          reason: 'PAYMENT_EXPIRED',
+        },
+        created_pic: creatorPic || null,
+      });
+    }
+  }
 }
+
