@@ -1,10 +1,10 @@
-import { query } from '../../config/database';
-import { UnitEntity } from './unit.types';
+import { query } from "../../config/database";
+import { UnitEntity } from "./unit.types";
 
 const UNIT_COLUMNS = `
   id_units,
-  name_units,
-  code, symbol, description, is_active,
+  name_unit,
+  code_unit, symbol, description, is_active,
   created_at, creator, updated_at, update_pic, deleted_at, delete_pic
 `;
 
@@ -14,8 +14,13 @@ export class UnitRepository {
     const params: any[] = [];
 
     if (search && search.trim().length > 0) {
-      sql += ` AND (name_units LIKE ? OR code LIKE ? OR symbol LIKE ? OR description LIKE ?)`;
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      sql += ` AND (name_unit LIKE ? OR code_unit LIKE ? OR symbol LIKE ? OR description LIKE ?)`;
+      params.push(
+        `%${search}%`,
+        `%${search}%`,
+        `%${search}%`,
+        `%${search}%`,
+      );
     }
 
     sql += ` ORDER BY id_units ASC`;
@@ -29,8 +34,11 @@ export class UnitRepository {
     return res[0] || null;
   }
 
-  async findByCode(code: string, excludeId?: number | string): Promise<UnitEntity | null> {
-    let sql = `SELECT ${UNIT_COLUMNS} FROM master_units WHERE LOWER(code) = LOWER(?) AND deleted_at IS NULL`;
+  async findByCode(
+    code: string,
+    excludeId?: number | string,
+  ): Promise<UnitEntity | null> {
+    let sql = `SELECT ${UNIT_COLUMNS} FROM master_units WHERE LOWER(code_unit) = LOWER(?) AND deleted_at IS NULL`;
     const params: any[] = [code.trim()];
 
     if (excludeId) {
@@ -43,39 +51,43 @@ export class UnitRepository {
     return res[0] || null;
   }
 
-  async create(data: Partial<UnitEntity>, creator: number | null = null): Promise<UnitEntity> {
-    const nameVal = data.name_units || (data as any).name;
+  async create(
+    data: Partial<UnitEntity>,
+    creator: number | null = null,
+  ): Promise<UnitEntity> {
     const sql = `
-      INSERT INTO master_units (name_units, code, symbol, description, is_active, created_at, creator)
+      INSERT INTO master_units (name_unit, code_unit, symbol, description, is_active, created_at, creator)
       VALUES (?, ?, ?, ?, ?, NOW(), ?)
     `;
     const res: any = await query(sql, [
-      nameVal,
-      data.code,
-      data.symbol || data.code,
-      data.description || null,
-      data.is_active !== undefined ? (data.is_active ? 1 : 0) : 1,
-      creator ?? (data as any)?.creator ?? 0,
+      data.name_unit,
+      data.code_unit,
+      data.symbol,
+      data.description,
+      data.is_active,
+      creator,
     ]);
 
     return (await this.findById(res.insertId))!;
   }
 
-  async update(id: number | string, data: Partial<UnitEntity>, updatePic: number | null = null): Promise<UnitEntity | null> {
+  async update(
+    id: number | string,
+    data: Partial<UnitEntity>,
+    updatePic: number | null = null,
+  ): Promise<UnitEntity | null> {
     const numId = Number(id);
     const current = await this.findById(numId);
     if (!current) return null;
 
-    const nameVal = data.name_units !== undefined ? data.name_units : (data as any).name !== undefined ? (data as any).name : current.name_units;
-
     const sql = `
       UPDATE master_units
-      SET name_units = ?, code = ?, symbol = ?, description = ?, is_active = ?, updated_at = NOW(), update_pic = ?
+      SET name_unit = ?, code_unit = ?, symbol = ?, description = ?, is_active = ?, updated_at = NOW(), update_pic = ?
       WHERE id_units = ? AND deleted_at IS NULL
     `;
     await query(sql, [
-      nameVal,
-      data.code !== undefined ? data.code : current.code,
+      data.name_unit !== undefined ? data.name_unit : current.name_unit,
+      data.code_unit !== undefined ? data.code_unit : current.code_unit,
       data.symbol !== undefined ? data.symbol : current.symbol,
       data.description !== undefined ? data.description : current.description,
       data.is_active !== undefined ? (data.is_active ? 1 : 0) : current.is_active,
@@ -86,7 +98,10 @@ export class UnitRepository {
     return await this.findById(numId);
   }
 
-  async softDelete(id: number | string, deletePic: number | null = null): Promise<boolean> {
+  async softDelete(
+    id: number | string,
+    deletePic: number | null = null,
+  ): Promise<boolean> {
     const numId = Number(id);
     const sql = `UPDATE master_units SET deleted_at = NOW(), delete_pic = ? WHERE id_units = ? AND deleted_at IS NULL`;
     const res: any = await query(sql, [deletePic, numId]);

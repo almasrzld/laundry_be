@@ -8,10 +8,12 @@ import { query } from '../../config/database';
 export class OrderService {
   private orderRepository: OrderRepository;
   private notificationService: NotificationService;
+  private userRepository: UserRepository;
 
-  constructor(orderRepository?: OrderRepository, notificationService?: NotificationService) {
+  constructor(orderRepository?: OrderRepository, notificationService?: NotificationService, userRepository?: UserRepository) {
     this.orderRepository = orderRepository || new OrderRepository();
     this.notificationService = notificationService || new NotificationService();
+    this.userRepository = userRepository || new UserRepository();
   }
 
   private formatTimeline(t: TimelineStepEntity): TimelineStepEntity {
@@ -109,6 +111,8 @@ export class OrderService {
       price_per_unit: number;
       delivery_fee?: number;
       discount?: number;
+      voucher_code?: string;
+      points_redeemed?: number;
       pickup_address: string;
       delivery_address?: string;
       courier_name?: string;
@@ -148,6 +152,30 @@ export class OrderService {
     };
 
     const created = await this.orderRepository.create(newOrder, creatorPic || undefined);
+    const createdOrderId = created.id_orders || created.id;
+
+    // Tandai voucher pengguna sebagai terpakai jika disertakan
+    if (rawUserId && data.voucher_code) {
+      try {
+        await this.userRepository.markUserVoucherAsUsed(rawUserId, data.voucher_code, createdOrderId);
+      } catch (vErr) {
+        console.warn('[OrderService Warning] Gagal menandai voucher sebagai terpakai:', vErr);
+      }
+    }
+
+    // Potong poin reward jika ada penukaran poin saat checkout
+    if (rawUserId && data.points_redeemed && Number(data.points_redeemed) > 0) {
+      try {
+        await this.userRepository.deductRewardPoints(
+          rawUserId,
+          Number(data.points_redeemed),
+          `Tukar Poin Checkout Pesanan #${created.invoice_no}`,
+          `Potongan harga Rp ${Number(data.points_redeemed).toLocaleString('id-ID')} pada pesanan #${created.invoice_no}`
+        );
+      } catch (pErr) {
+        console.warn('[OrderService Warning] Gagal memotong poin reward checkout:', pErr);
+      }
+    }
 
     // 1. Trigger Notifikasi: Pesanan Baru Masuk (Ditujukan ke Admin & Kasir)
     try {

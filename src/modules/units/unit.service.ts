@@ -1,6 +1,6 @@
-import { UnitRepository } from './unit.repository';
-import { UnitEntity, CreateUnitDto, UpdateUnitDto } from './unit.types';
-import { CryptoUtil } from '../../utils/crypto.util';
+import { UnitRepository } from "./unit.repository";
+import { UnitEntity, CreateUnitDto, UpdateUnitDto } from "./unit.types";
+import { CryptoUtil } from "../../utils/crypto.util";
 
 export class UnitService {
   private repo = new UnitRepository();
@@ -11,7 +11,8 @@ export class UnitService {
       ...entity,
       id_units: rawId,
       id: CryptoUtil.encryptId(rawId) ?? String(rawId),
-      name: entity.name_units ?? entity.name,
+      name_unit: entity.name_unit,
+      code_unit: entity.code_unit,
       is_active: Boolean(entity.is_active),
     };
   }
@@ -28,22 +29,32 @@ export class UnitService {
     return item ? this.formatUnit(item) : null;
   }
 
-  async createUnit(dto: CreateUnitDto, creator: number | null = null): Promise<UnitEntity> {
-    const cleanCode = dto.code.trim().toLowerCase();
-    const existing = await this.repo.findByCode(cleanCode);
-    if (existing) {
-      throw new Error(`Kode satuan "${dto.code}" sudah terdaftar.`);
+  async createUnit(
+    dto: CreateUnitDto,
+    creator: number | null = null,
+  ): Promise<UnitEntity> {
+    const cleanCode = dto.code_unit.trim().toLowerCase();
+    if (!cleanCode) {
+      throw new Error("Kode satuan wajib diisi.");
     }
 
-    const unitName = (dto.name_units || dto.name || '').trim();
+    const existing = await this.repo.findByCode(cleanCode);
+    if (existing) {
+      throw new Error(`Kode satuan "${cleanCode}" sudah terdaftar.`);
+    }
+
+    const unitName = dto.name_unit.trim();
+    if (!unitName) {
+      throw new Error("Nama satuan wajib diisi.");
+    }
+
     const created = await this.repo.create(
       {
-        name_units: unitName,
-        name: unitName,
-        code: cleanCode,
-        symbol: dto.symbol?.trim() || cleanCode,
+        name_unit: unitName,
+        code_unit: cleanCode,
+        symbol: dto.symbol?.trim() || null,
         description: dto.description?.trim() || null,
-        is_active: dto.is_active !== undefined ? (dto.is_active ? 1 : 0) : 1,
+        is_active: dto.is_active ? 1 : 0,
       },
       creator,
     );
@@ -51,28 +62,34 @@ export class UnitService {
     return this.formatUnit(created);
   }
 
-  async updateUnit(id: string, dto: UpdateUnitDto, updatePic: number | null = null): Promise<UnitEntity | null> {
+  async updateUnit(
+    id: string,
+    dto: UpdateUnitDto,
+    updatePic: number | null = null,
+  ): Promise<UnitEntity | null> {
     const numericId = CryptoUtil.decryptId(id);
-    if (!numericId) throw new Error('ID Satuan tidak valid.');
+    if (!numericId) throw new Error("ID Satuan tidak valid.");
 
-    if (dto.code) {
-      const cleanCode = dto.code.trim().toLowerCase();
+    if (dto.code_unit !== undefined) {
+      const cleanCode = dto.code_unit.trim().toLowerCase();
       const existing = await this.repo.findByCode(cleanCode, numericId);
       if (existing) {
-        throw new Error(`Kode satuan "${dto.code}" sudah digunakan.`);
+        throw new Error(`Kode satuan "${cleanCode}" sudah digunakan.`);
       }
     }
-
-    const unitName = dto.name_units !== undefined ? dto.name_units.trim() : (dto.name !== undefined ? dto.name.trim() : undefined);
 
     const updated = await this.repo.update(
       numericId,
       {
-        ...(unitName !== undefined && { name_units: unitName, name: unitName }),
-        ...(dto.code && { code: dto.code.trim().toLowerCase() }),
+        ...(dto.name_unit !== undefined && { name_unit: dto.name_unit.trim() }),
+        ...(dto.code_unit !== undefined && { code_unit: dto.code_unit.trim().toLowerCase() }),
         ...(dto.symbol !== undefined && { symbol: dto.symbol?.trim() || null }),
-        ...(dto.description !== undefined && { description: dto.description?.trim() || null }),
-        ...(dto.is_active !== undefined && { is_active: dto.is_active ? 1 : 0 }),
+        ...(dto.description !== undefined && {
+          description: dto.description?.trim() || null,
+        }),
+        ...(dto.is_active !== undefined && {
+          is_active: dto.is_active ? 1 : 0,
+        }),
       },
       updatePic,
     );
@@ -80,9 +97,12 @@ export class UnitService {
     return updated ? this.formatUnit(updated) : null;
   }
 
-  async deleteUnit(id: string, deletePic: number | null = null): Promise<boolean> {
+  async deleteUnit(
+    id: string,
+    deletePic: number | null = null,
+  ): Promise<boolean> {
     const numericId = CryptoUtil.decryptId(id);
-    if (!numericId) throw new Error('ID Satuan tidak valid.');
+    if (!numericId) throw new Error("ID Satuan tidak valid.");
     return await this.repo.softDelete(numericId, deletePic);
   }
 }

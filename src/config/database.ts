@@ -135,6 +135,145 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
       console.warn('  ▲ [Migration Info] wallet_transactions table check:', e.message);
     }
 
+    // Auto-create user_vouchers table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS user_vouchers (
+          id_user_vouchers INT AUTO_INCREMENT PRIMARY KEY,
+          users_id INT NOT NULL,
+          promos_id INT NULL,
+          code_voucher VARCHAR(50) NOT NULL,
+          title VARCHAR(150) NOT NULL,
+          subtitle VARCHAR(255) NULL,
+          discount_amount INT NOT NULL DEFAULT 0,
+          min_order_amount INT NOT NULL DEFAULT 0,
+          points_spent INT NOT NULL DEFAULT 0,
+          is_used BOOLEAN NOT NULL DEFAULT FALSE,
+          used_at DATETIME NULL,
+          orders_id INT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          creator BIGINT UNSIGNED NULL,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          update_pic BIGINT UNSIGNED NULL,
+          deleted_at DATETIME NULL,
+          delete_pic BIGINT UNSIGNED NULL,
+          INDEX idx_user_vouchers_user (users_id),
+          INDEX idx_user_vouchers_code (code_voucher)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN points_required INT NOT NULL DEFAULT 0 AFTER min_order_amount`); } catch (_) {}
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] user_vouchers table check:', e.message);
+    }
+
+    // Auto-create master_outlets table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS master_outlets (
+          id_outlets INT AUTO_INCREMENT PRIMARY KEY,
+          name_outlet VARCHAR(150) NOT NULL,
+          address TEXT NOT NULL,
+          latitude VARCHAR(50) NOT NULL,
+          longitude VARCHAR(50) NOT NULL,
+          phone VARCHAR(30) NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          creator BIGINT UNSIGNED NOT NULL,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          update_pic BIGINT UNSIGNED NULL,
+          deleted_at DATETIME NULL,
+          delete_pic BIGINT UNSIGNED NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+
+      try { await connection.query(`ALTER TABLE master_outlets MODIFY COLUMN latitude VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_outlets MODIFY COLUMN longitude VARCHAR(50) NOT NULL`); } catch (_) {}
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] master_outlets table check:', e.message);
+    }
+
+    // Auto-create/update master_ongkirs table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS master_ongkirs (
+          id_ongkirs INT AUTO_INCREMENT PRIMARY KEY,
+          outlets_id INT NOT NULL,
+          units_id INT NOT NULL,
+          name_ongkir VARCHAR(100) NOT NULL,
+          code_ongkir VARCHAR(3) NOT NULL,
+          free_radius DECIMAL(14, 2) NOT NULL,
+          base_radius DECIMAL(14, 2) NOT NULL,
+          base_price INT NOT NULL,
+          step_radius DECIMAL(14, 2) NOT NULL,
+          step_price INT NOT NULL,
+          max_radius DECIMAL(14, 2) NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          creator BIGINT UNSIGNED NOT NULL,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          update_pic BIGINT UNSIGNED NULL,
+          deleted_at DATETIME NULL,
+          delete_pic BIGINT UNSIGNED NULL,
+          INDEX idx_ongkir_outlets (outlets_id),
+          INDEX idx_ongkir_units (units_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN outlets_id INT NOT NULL AFTER id_ongkirs`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN units_id INT NOT NULL AFTER outlets_id`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN free_radius DECIMAL(14, 2) NOT NULL AFTER code_ongkir`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN base_radius DECIMAL(14, 2) NOT NULL AFTER free_radius`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN base_price INT NOT NULL AFTER base_radius`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN step_radius DECIMAL(14, 2) NOT NULL AFTER base_price`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN step_price INT NOT NULL AFTER step_radius`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs ADD COLUMN max_radius DECIMAL(14, 2) NOT NULL AFTER step_price`); } catch (_) {}
+
+      // Dynamic cleanup: remove any obsolete/legacy columns that are not in the new master_ongkirs schema
+      try {
+        const [existingCols]: any = await connection.query(`SHOW COLUMNS FROM master_ongkirs`);
+        const validCols = new Set([
+          'id_ongkirs',
+          'outlets_id',
+          'units_id',
+          'name_ongkir',
+          'code_ongkir',
+          'free_radius',
+          'base_radius',
+          'base_price',
+          'step_radius',
+          'step_price',
+          'max_radius',
+          'created_at',
+          'creator',
+          'updated_at',
+          'update_pic',
+          'deleted_at',
+          'delete_pic',
+        ]);
+
+        for (const col of existingCols) {
+          if (!validCols.has(col.Field)) {
+            try {
+              await connection.query(`ALTER TABLE master_ongkirs DROP COLUMN \`${col.Field}\``);
+              console.log(`  ✓ [Migration] Dropped legacy column master_ongkirs.${col.Field}`);
+            } catch (_) {
+              try {
+                await connection.query(`ALTER TABLE master_ongkirs MODIFY COLUMN \`${col.Field}\` TEXT NULL DEFAULT NULL`);
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (colErr: any) {
+        console.warn('  ▲ [Migration Info] legacy columns check:', colErr.message);
+      }
+
+      // Modify existing column definitions to DECIMAL(14, 2)
+      try { await connection.query(`ALTER TABLE master_ongkirs MODIFY COLUMN free_radius DECIMAL(14, 2) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs MODIFY COLUMN base_radius DECIMAL(14, 2) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs MODIFY COLUMN step_radius DECIMAL(14, 2) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE master_ongkirs MODIFY COLUMN max_radius DECIMAL(14, 2) NOT NULL`); } catch (_) {}
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] master_ongkirs table check:', e.message);
+    }
+
     // Auto-sync existing tips to courier laundry_pay_balance & wallet_transactions
     try {
       const [couriersWithTips]: any = await connection.query(`

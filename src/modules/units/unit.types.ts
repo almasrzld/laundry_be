@@ -1,9 +1,8 @@
 export interface UnitEntity {
   id: number | string;
   id_units?: number | string;
-  name: string;
-  name_units?: string;
-  code: string;
+  name_unit: string;
+  code_unit: string;
   symbol?: string | null;
   description?: string | null;
   is_active: boolean | number;
@@ -16,18 +15,16 @@ export interface UnitEntity {
 }
 
 export interface CreateUnitDto {
-  name: string;
-  name_units?: string;
-  code: string;
+  name_unit: string;
+  code_unit: string;
   symbol?: string | null;
   description?: string | null;
   is_active?: boolean | number;
 }
 
 export interface UpdateUnitDto {
-  name?: string;
-  name_units?: string;
-  code?: string;
+  name_unit?: string;
+  code_unit?: string;
   symbol?: string | null;
   description?: string | null;
   is_active?: boolean | number;

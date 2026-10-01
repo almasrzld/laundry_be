@@ -16,6 +16,8 @@ import orderStatusRoutes from './modules/order-statuses/order-status.routes';
 import notificationRoutes from './modules/notifications/notification.routes';
 import courierRoutes from './modules/couriers/courier.routes';
 import paymentRoutes from './modules/payments/payment.routes';
+import ongkirRoutes from './modules/ongkirs/ongkir.routes';
+import outletRoutes from './modules/outlets/outlet.routes';
 import { sendSuccess } from './utils/response.util';
 
 const apiRouter = Router();
@@ -43,6 +45,8 @@ apiRouter.use('/system', systemRoutes);
 apiRouter.use('/icons', iconRoutes);
 apiRouter.use('/storage-shelves', storageShelfRoutes);
 apiRouter.use('/shelves', storageShelfRoutes);
+apiRouter.use('/ongkirs', ongkirRoutes);
+apiRouter.use('/outlets', outletRoutes);
 
 // Modular Master Data Routes
 apiRouter.use('/master/icons', iconRoutes);
@@ -52,6 +56,8 @@ apiRouter.use('/master/perfumes', perfumeRoutes);
 apiRouter.use('/master/shelf-types', shelfTypeRoutes);
 apiRouter.use('/master/payment-methods', paymentMethodRoutes);
 apiRouter.use('/master/order-statuses', orderStatusRoutes);
+apiRouter.use('/master/ongkirs', ongkirRoutes);
+apiRouter.use('/master/outlets', outletRoutes);
 
 apiRouter.use('/units', unitRoutes);
 apiRouter.use('/service-categories', serviceCategoryRoutes);

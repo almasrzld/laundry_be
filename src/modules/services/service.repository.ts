@@ -39,22 +39,39 @@ const SERVICE_COLUMNS = `
 `;
 
 export class ServiceRepository {
-  private async attachRelations(services: ServiceEntity[]): Promise<ServiceEntity[]> {
+  private async attachRelations(
+    services: ServiceEntity[],
+  ): Promise<ServiceEntity[]> {
     if (services.length === 0) return [];
 
     try {
-      const units = await query<{ id_units: number; name_units: string; code: string; symbol: string }>(
-        `SELECT id_units, name_units, code, symbol FROM master_units WHERE deleted_at IS NULL`
+      const units = await query<{
+        id_units: number;
+        name_unit: string;
+        code_unit: string;
+        symbol: string;
+      }>(
+        `SELECT id_units, name_unit, code_unit, symbol FROM master_units WHERE deleted_at IS NULL`,
       );
-      const categories = await query<{ id_service_categories: number; name_service_categories: string; code: string }>(
-        `SELECT id_service_categories, name_service_categories, code FROM master_service_categories WHERE deleted_at IS NULL`
+      const categories = await query<{
+        id_service_categories: number;
+        name_service_categories: string;
+        code: string;
+      }>(
+        `SELECT id_service_categories, name_service_categories, code FROM master_service_categories WHERE deleted_at IS NULL`,
       );
-      const icons = await query<{ id_icons: number; name_icons: string; code: string }>(
-        `SELECT id_icons, name_icons, code FROM icons WHERE deleted_at IS NULL`
+      const icons = await query<{
+        id_icons: number;
+        name_icons: string;
+        code: string;
+      }>(
+        `SELECT id_icons, name_icons, code FROM icons WHERE deleted_at IS NULL`,
       );
 
       const unitMap = new Map(units.map((u) => [Number(u.id_units), u]));
-      const catMap = new Map(categories.map((c) => [Number(c.id_service_categories), c]));
+      const catMap = new Map(
+        categories.map((c) => [Number(c.id_service_categories), c]),
+      );
       const iconMap = new Map(icons.map((i) => [Number(i.id_icons), i]));
 
       for (const s of services) {
@@ -67,11 +84,12 @@ export class ServiceRepository {
         const u = unitMap.get(Number(s.units_id));
         if (u) {
           s.unit_id = CryptoUtil.encryptId(u.id_units) ?? String(u.id_units);
-          s.unit = u.code;
-          s.unit_name = u.name_units;
+          s.unit = u.code_unit;
+          s.unit_name = u.name_unit;
           s.unit_symbol = u.symbol;
         } else {
-          s.unit_id = CryptoUtil.encryptId(Number(s.units_id)) ?? String(s.units_id);
+          s.unit_id =
+            CryptoUtil.encryptId(Number(s.units_id)) ?? String(s.units_id);
           s.unit = "";
           s.unit_name = "";
           s.unit_symbol = "";
@@ -79,12 +97,16 @@ export class ServiceRepository {
 
         const c = catMap.get(Number(s.service_categories_id));
         if (c) {
-          s.service_category_id = CryptoUtil.encryptId(c.id_service_categories) ?? String(c.id_service_categories);
+          s.service_category_id =
+            CryptoUtil.encryptId(c.id_service_categories) ??
+            String(c.id_service_categories);
           s.category_id = s.service_category_id;
           s.category = c.code;
           s.category_name = c.name_service_categories;
         } else {
-          s.service_category_id = CryptoUtil.encryptId(Number(s.service_categories_id)) ?? String(s.service_categories_id);
+          s.service_category_id =
+            CryptoUtil.encryptId(Number(s.service_categories_id)) ??
+            String(s.service_categories_id);
           s.category_id = s.service_category_id;
           s.category = "";
           s.category_name = "";
@@ -93,11 +115,13 @@ export class ServiceRepository {
         if (s.icons_id) {
           const ic = iconMap.get(Number(s.icons_id));
           if (ic) {
-            s.icon_id = CryptoUtil.encryptId(ic.id_icons) ?? String(ic.id_icons);
+            s.icon_id =
+              CryptoUtil.encryptId(ic.id_icons) ?? String(ic.id_icons);
             s.icon_code = ic.code;
             s.icon_name = ic.name_icons;
           } else {
-            s.icon_id = CryptoUtil.encryptId(Number(s.icons_id)) ?? String(s.icons_id);
+            s.icon_id =
+              CryptoUtil.encryptId(Number(s.icons_id)) ?? String(s.icons_id);
             s.icon_code = "shirt";
             s.icon_name = "";
           }
@@ -112,21 +136,27 @@ export class ServiceRepository {
     return services;
   }
 
-  private async resolveForeignKeys(service: Partial<ServiceEntity> & Record<string, any>): Promise<{
+  private async resolveForeignKeys(
+    service: Partial<ServiceEntity> & Record<string, any>,
+  ): Promise<{
     units_id: number;
     service_categories_id: number;
     icons_id: number | null;
   }> {
     let units_id = 0;
     if (service.units_id) {
-      units_id = Number(CryptoUtil.decryptId(service.units_id) ?? service.units_id);
+      units_id = Number(
+        CryptoUtil.decryptId(service.units_id) ?? service.units_id,
+      );
     } else if (service.unit_id) {
-      units_id = Number(CryptoUtil.decryptId(service.unit_id) ?? service.unit_id);
+      units_id = Number(
+        CryptoUtil.decryptId(service.unit_id) ?? service.unit_id,
+      );
     }
     if (!units_id && service.unit) {
       const u = await query<{ id_units: number }>(
-        `SELECT id_units FROM master_units WHERE LOWER(code) = LOWER(?) OR LOWER(symbol) = LOWER(?) LIMIT 1`,
-        [String(service.unit).trim(), String(service.unit).trim()]
+        `SELECT id_units FROM master_units WHERE LOWER(code_unit) = LOWER(?) OR LOWER(name_unit) = LOWER(?) OR LOWER(symbol) = LOWER(?) LIMIT 1`,
+        [String(service.unit).trim(), String(service.unit).trim(), String(service.unit).trim()],
       );
       if (u.length > 0) units_id = u[0].id_units;
     }
@@ -134,7 +164,10 @@ export class ServiceRepository {
 
     let service_categories_id = 0;
     if (service.service_categories_id) {
-      service_categories_id = Number(CryptoUtil.decryptId(service.service_categories_id) ?? service.service_categories_id);
+      service_categories_id = Number(
+        CryptoUtil.decryptId(service.service_categories_id) ??
+          service.service_categories_id,
+      );
     } else if (service.category_id || service.service_category_id) {
       const catId = service.category_id || service.service_category_id;
       service_categories_id = Number(CryptoUtil.decryptId(catId) ?? catId);
@@ -142,7 +175,7 @@ export class ServiceRepository {
     if (!service_categories_id && service.category) {
       const c = await query<{ id_service_categories: number }>(
         `SELECT id_service_categories FROM master_service_categories WHERE LOWER(code) = LOWER(?) OR LOWER(name_service_categories) = LOWER(?) LIMIT 1`,
-        [String(service.category).trim(), String(service.category).trim()]
+        [String(service.category).trim(), String(service.category).trim()],
       );
       if (c.length > 0) service_categories_id = c[0].id_service_categories;
     }
@@ -150,14 +183,18 @@ export class ServiceRepository {
 
     let icons_id: number | null = null;
     if (service.icons_id) {
-      icons_id = Number(CryptoUtil.decryptId(service.icons_id) ?? service.icons_id);
+      icons_id = Number(
+        CryptoUtil.decryptId(service.icons_id) ?? service.icons_id,
+      );
     } else if (service.icon_id) {
-      icons_id = Number(CryptoUtil.decryptId(service.icon_id) ?? service.icon_id);
+      icons_id = Number(
+        CryptoUtil.decryptId(service.icon_id) ?? service.icon_id,
+      );
     }
     if (!icons_id && service.icon_code) {
       const ic = await query<{ id_icons: number }>(
         `SELECT id_icons FROM icons WHERE LOWER(code) = LOWER(?) LIMIT 1`,
-        [String(service.icon_code).trim()]
+        [String(service.icon_code).trim()],
       );
       if (ic.length > 0) icons_id = ic[0].id_icons;
     }
@@ -189,7 +226,7 @@ export class ServiceRepository {
           (s) =>
             s.category?.toLowerCase() === catClean ||
             String(s.service_categories_id) === categoryFilter ||
-            s.category_id === categoryFilter
+            s.category_id === categoryFilter,
         );
       }
 
@@ -219,7 +256,8 @@ export class ServiceRepository {
   ): Promise<ServiceEntity> {
     const serviceName = service.name_services || service.name || "";
     const creatorVal = creatorPic ?? service.creator ?? 0;
-    const { units_id, service_categories_id, icons_id } = await this.resolveForeignKeys(service);
+    const { units_id, service_categories_id, icons_id } =
+      await this.resolveForeignKeys(service);
 
     const newService: ServiceEntity = {
       id_services: 0,
@@ -259,7 +297,8 @@ export class ServiceRepository {
       ]);
       if (res && res.insertId) {
         newService.id_services = res.insertId;
-        newService.id = CryptoUtil.encryptId(res.insertId) ?? String(res.insertId);
+        newService.id =
+          CryptoUtil.encryptId(res.insertId) ?? String(res.insertId);
         return (await this.findById(res.insertId)) || newService;
       }
     } catch (err: any) {
@@ -277,22 +316,35 @@ export class ServiceRepository {
   ): Promise<ServiceEntity | null> {
     const numericId = CryptoUtil.decryptId(id) ?? id;
     const serviceName = service.name_services ?? service.name ?? null;
-    
+
     // Check if foreign keys need resolving
     let units_id: number | null = null;
-    if (service.units_id !== undefined || service.unit_id !== undefined || service.unit !== undefined) {
+    if (
+      service.units_id !== undefined ||
+      service.unit_id !== undefined ||
+      service.unit !== undefined
+    ) {
       const fks = await this.resolveForeignKeys(service);
       units_id = fks.units_id;
     }
 
     let service_categories_id: number | null = null;
-    if (service.service_categories_id !== undefined || service.category_id !== undefined || service.service_category_id !== undefined || service.category !== undefined) {
+    if (
+      service.service_categories_id !== undefined ||
+      service.category_id !== undefined ||
+      service.service_category_id !== undefined ||
+      service.category !== undefined
+    ) {
       const fks = await this.resolveForeignKeys(service);
       service_categories_id = fks.service_categories_id;
     }
 
     let icons_id: number | null | undefined = undefined;
-    if (service.icons_id !== undefined || service.icon_id !== undefined || service.icon_code !== undefined) {
+    if (
+      service.icons_id !== undefined ||
+      service.icon_id !== undefined ||
+      service.icon_code !== undefined
+    ) {
       const fks = await this.resolveForeignKeys(service);
       icons_id = fks.icons_id;
     }

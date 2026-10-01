@@ -76,7 +76,23 @@ export class UserService {
     return this.userRepository.getPointHistories(userId);
   }
 
-  async redeemPoints(userId: string, points: number, title?: string, description?: string) {
+  async redeemPoints(
+    userId: string,
+    data: {
+      points: number;
+      code_voucher?: string;
+      code?: string;
+      title?: string;
+      subtitle?: string;
+      description?: string;
+      discount_amount?: number;
+      min_order_amount?: number;
+      promos_id?: number | null;
+    } | number,
+    titleParam?: string,
+    descriptionParam?: string
+  ) {
+    const points = typeof data === 'number' ? data : data.points;
     if (!points || points <= 0) {
       throw new Error('Jumlah poin yang ditukarkan harus lebih dari 0');
     }
@@ -91,26 +107,73 @@ export class UserService {
       throw new Error(`Poin Anda tidak mencukupi (Poin Anda: ${currentPoints}, Dibutuhkan: ${points})`);
     }
 
+    const rawCode = typeof data === 'object' ? (data.code_voucher || data.code) : null;
+    const title = typeof data === 'object' ? (data.title || titleParam) : titleParam;
+    const subtitle = typeof data === 'object' ? (data.subtitle || data.description || descriptionParam) : descriptionParam;
+    const discountAmount = typeof data === 'object' ? (Number(data.discount_amount) || 0) : 0;
+    const minOrderAmount = typeof data === 'object' ? (Number(data.min_order_amount) || 0) : 0;
+    const promosId = typeof data === 'object' ? data.promos_id : null;
+
+    const finalCode = (rawCode || `REWARD-${points}PTS-${Date.now().toString().slice(-4)}`).toUpperCase();
+    const finalTitle = title || `Voucher Reward Diskon (-${points} Poin)`;
+    const finalSubtitle = subtitle || `Ditukarkan dengan ${points} Poin Reward`;
+
     const success = await this.userRepository.deductRewardPoints(
       userId,
       points,
-      title || `Tukar Voucher Diskon (-${points} Poin)`,
-      description || `Penukaran ${points} poin dengan voucher diskon Almas Laundry`
+      finalTitle,
+      `Penukaran kode voucher ${finalCode}`
     );
 
     if (!success) {
       throw new Error('Gagal menukarkan poin, silakan coba kembali');
     }
 
+    // Simpan voucher resmi ke tabel user_vouchers milik user ini
+    const voucher = await this.userRepository.createUserVoucher(userId, {
+      code_voucher: finalCode,
+      title: finalTitle,
+      subtitle: finalSubtitle,
+      discount_amount: discountAmount > 0 ? discountAmount : (points === 50 ? 10000 : points === 100 ? 10000 : points === 200 ? 20000 : points === 300 ? 15000 : points * 100),
+      min_order_amount: minOrderAmount > 0 ? minOrderAmount : (points === 50 ? 25000 : points === 100 ? 30000 : points === 200 ? 50000 : points === 300 ? 40000 : 0),
+      points_spent: points,
+      promos_id: promosId,
+    });
+
     return {
       success: true,
       message: `Selamat! Berhasil menukarkan ${points} poin reward`,
       remaining_points: currentPoints - points,
+      voucher,
     };
+  }
+
+  async getUserVouchers(userId: string, activeOnly = false) {
+    return this.userRepository.getUserVouchers(userId, activeOnly);
+  }
+
+  async verifyUserVoucher(userId: string, code: string) {
+    if (!code || !code.trim()) {
+      throw new Error('Kode voucher wajib diisi');
+    }
+
+    const cleanCode = code.trim().toUpperCase();
+    const voucher = await this.userRepository.findUserVoucherByCode(userId, cleanCode, true);
+
+    if (!voucher) {
+      throw new Error('Kode voucher tidak valid atau belum Anda tukarkan.');
+    }
+
+    if (voucher.is_used) {
+      throw new Error('Voucher ini sudah pernah digunakan untuk pesanan lain.');
+    }
+
+    return voucher;
   }
 
   async getWalletTransactions(userId: string, limit?: number) {
     return this.userRepository.getWalletTransactions(userId, limit);
   }
 }
+
 

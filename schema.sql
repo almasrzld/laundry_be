@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `order_date` DATETIME NOT NULL,
   `estimated_completion_date` DATETIME NOT NULL,
   `status` VARCHAR(50) NOT NULL DEFAULT 'Menunggu Penjemputan',
-  `quantity` DOUBLE NOT NULL DEFAULT 1.0,
+  `quantity` DECIMAL(14, 2) NOT NULL DEFAULT 1.00,
   `unit` VARCHAR(20) NOT NULL DEFAULT 'kg',
   `price_per_unit` INT NOT NULL,
   `delivery_fee` INT NOT NULL DEFAULT 0,
@@ -309,8 +309,8 @@ CREATE TABLE IF NOT EXISTS `master_service_categories` (
 -- 15. TABEL MASTER_UNITS
 CREATE TABLE IF NOT EXISTS `master_units` (
   `id_units` INT AUTO_INCREMENT PRIMARY KEY,
-  `name_units` VARCHAR(100) NOT NULL,
-  `code` VARCHAR(50) NOT NULL,
+  `name_unit` VARCHAR(100) NOT NULL,
+  `code_unit` VARCHAR(50) NOT NULL,
   `symbol` VARCHAR(20) NOT NULL,
   `description` TEXT NULL,
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
@@ -432,3 +432,45 @@ CREATE TABLE IF NOT EXISTS `payment_transactions` (
   INDEX `idx_pay_ref` (`reference_id`),
   FOREIGN KEY (`orders_id`) REFERENCES `orders`(`id_orders`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 22. TABEL MASTER_OUTLETS
+CREATE TABLE IF NOT EXISTS `master_outlets` (
+  `id_outlets` INT AUTO_INCREMENT PRIMARY KEY,
+  `name_outlet` VARCHAR(150) NOT NULL,
+  `address` TEXT NOT NULL,
+  `latitude` VARCHAR(50) NOT NULL,
+  `longitude` VARCHAR(50) NOT NULL,
+  `phone` VARCHAR(30) NULL,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `creator` BIGINT UNSIGNED NOT NULL,
+  `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+  `update_pic` BIGINT UNSIGNED NULL,
+  `deleted_at` DATETIME NULL,
+  `delete_pic` BIGINT UNSIGNED NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 23. TABEL MASTER_ONGKIRS
+CREATE TABLE IF NOT EXISTS `master_ongkirs` (
+  `id_ongkirs` INT AUTO_INCREMENT PRIMARY KEY,
+  `outlets_id` INT NOT NULL,
+  `units_id` INT NOT NULL,
+  `name_ongkir` VARCHAR(100) NOT NULL,
+  `code_ongkir` VARCHAR(3) NOT NULL,
+  `free_radius` DECIMAL(14, 2) NOT NULL,
+  `base_radius` DECIMAL(14, 2) NOT NULL,
+  `base_price` INT NOT NULL,
+  `step_radius` DECIMAL(14, 2) NOT NULL,
+  `step_price` INT NOT NULL,
+  `max_radius` DECIMAL(14, 2) NOT NULL,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `creator` BIGINT UNSIGNED NOT NULL,
+  `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+  `update_pic` BIGINT UNSIGNED NULL,
+  `deleted_at` DATETIME NULL,
+  `delete_pic` BIGINT UNSIGNED NULL,
+  INDEX `idx_ongkir_outlets` (`outlets_id`),
+  INDEX `idx_ongkir_units` (`units_id`),
+  FOREIGN KEY (`outlets_id`) REFERENCES `master_outlets`(`id_outlets`) ON DELETE CASCADE,
+  FOREIGN KEY (`units_id`) REFERENCES `master_units`(`id_units`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+

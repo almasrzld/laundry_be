@@ -138,11 +138,49 @@ export class UserController {
         sendError(res, 'Sesi autentikasi tidak valid', 401);
         return;
       }
-      const { points, title, description } = req.body;
-      const result = await this.userService.redeemPoints(String(userId), Number(points), title, description);
+      const { points, code_voucher, code, title, subtitle, description, discount_amount, min_order_amount, promos_id } = req.body;
+      const result = await this.userService.redeemPoints(String(userId), {
+        points: Number(points),
+        code_voucher: code_voucher || code,
+        title,
+        subtitle: subtitle || description,
+        discount_amount: discount_amount ? Number(discount_amount) : undefined,
+        min_order_amount: min_order_amount ? Number(min_order_amount) : undefined,
+        promos_id,
+      });
       sendSuccess(res, result, result.message);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menukarkan poin', 400);
+    }
+  };
+
+  getUserVouchers = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const activeOnly = req.query.active_only === 'true' || req.query.status === 'active';
+      const vouchers = await this.userService.getUserVouchers(String(userId), activeOnly);
+      sendSuccess(res, vouchers, 'Daftar voucher berhasil diambil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengambil daftar voucher', 500);
+    }
+  };
+
+  verifyUserVoucher = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const code = (req.body.code || req.body.code_voucher || req.query.code) as string;
+      const voucher = await this.userService.verifyUserVoucher(String(userId), code);
+      sendSuccess(res, voucher, 'Voucher valid & siap digunakan');
+    } catch (error: any) {
+      sendError(res, error.message || 'Kode voucher tidak valid atau belum Anda tukarkan.', 400);
     }
   };
 
@@ -161,4 +199,5 @@ export class UserController {
     }
   };
 }
+
 

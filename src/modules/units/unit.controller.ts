@@ -30,13 +30,20 @@ export class UnitController {
 
   createUnit = async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { name, code, symbol, description, is_active } = req.body;
-      if (!name || !code) {
+      const { name_unit, code_unit, symbol, description, is_active } = req.body;
+
+      if (!name_unit?.trim() || !code_unit?.trim()) {
         return sendError(res, 'Nama dan kode satuan wajib diisi', 400);
       }
       const creator = getPicId(req);
       const created = await this.service.createUnit(
-        { name, code, symbol, description, is_active },
+        {
+          name_unit: name_unit.trim(),
+          code_unit: code_unit.trim(),
+          symbol,
+          description,
+          is_active: Boolean(is_active),
+        },
         creator,
       );
       return sendSuccess(res, created, 'Master satuan berhasil ditambahkan', 201);
