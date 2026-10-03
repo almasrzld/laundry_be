@@ -3,6 +3,7 @@ import { query } from '../../config/database';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { UserEntity } from '../auth/auth.repository';
 import { isCustomerRole, getPermissionsForRole } from '../../utils/role.util';
+import { normalizeCategory, normalizeBenefitType, normalizeDiscountType } from '../promos/promo.repository';
 
 export interface AddressEntity {
   id?: string | number;
@@ -475,9 +476,15 @@ export class UserRepository {
           code_voucher,
           title,
           subtitle,
+          category,
+          benefit_type,
+          discount_type,
           discount_amount,
+          max_discount,
           min_order_amount,
           points_spent,
+          DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
+          DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date,
           is_used,
           used_at,
           orders_id,
@@ -486,7 +493,7 @@ export class UserRepository {
         WHERE users_id = ? AND deleted_at IS NULL
       `;
       if (activeOnly) {
-        sql += ' AND is_used = 0';
+        sql += ' AND is_used = 0 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())';
       }
       sql += ' ORDER BY is_used ASC, id_user_vouchers DESC';
 
@@ -499,9 +506,15 @@ export class UserRepository {
         users_id: r.users_id,
         code: r.code_voucher,
         code_voucher: r.code_voucher,
+        category: normalizeCategory(r.category),
+        benefit_type: normalizeBenefitType(r.benefit_type),
+        discount_type: normalizeDiscountType(r.discount_type),
         discount_amount: Number(r.discount_amount) || 0,
+        max_discount: r.max_discount !== null && r.max_discount !== undefined ? Number(r.max_discount) : null,
         min_order_amount: Number(r.min_order_amount) || 0,
         points_spent: Number(r.points_spent) || 0,
+        start_date: r.start_date || '',
+        end_date: r.end_date || '',
         is_used: Boolean(r.is_used),
         order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
       }));
@@ -517,21 +530,39 @@ export class UserRepository {
       code_voucher: string;
       title: string;
       subtitle?: string;
+      category?: string;
+      benefit_type?: string;
+      discount_type?: string;
       discount_amount: number;
+      max_discount?: number | null;
       min_order_amount?: number;
       points_spent: number;
       promos_id?: number | null;
+      start_date?: string;
+      end_date?: string;
     },
     creatorPic?: number | null
   ): Promise<UserVoucherEntity> {
     const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
     const creatorVal = creatorPic ?? numericUserId ?? 0;
     const cleanCode = (data.code_voucher || '').trim().toUpperCase();
+    const category = normalizeCategory(data.category);
+    const benefitType = normalizeBenefitType(data.benefit_type);
+    const discountType = normalizeDiscountType(data.discount_type);
+    const discountAmount = Number(data.discount_amount) || 0;
+    const maxDiscount = data.max_discount !== undefined && data.max_discount !== null ? Number(data.max_discount) : null;
+    const minOrderAmount = Number(data.min_order_amount) || 0;
+    const pointsSpent = Number(data.points_spent) || 0;
+    const startDate = data.start_date ? String(data.start_date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const endDate = data.end_date ? String(data.end_date).slice(0, 10) : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
 
     const sql = `
       INSERT INTO user_vouchers (
-        users_id, promos_id, code_voucher, title, subtitle, discount_amount, min_order_amount, points_spent, is_used, created_at, creator
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NOW(), ?)
+        users_id, promos_id, code_voucher, title, subtitle,
+        category, benefit_type, discount_type, discount_amount, max_discount,
+        min_order_amount, points_spent, start_date, end_date,
+        is_used, created_at, creator
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW(), ?)
     `;
 
     const res: any = await query(sql, [
@@ -540,9 +571,15 @@ export class UserRepository {
       cleanCode,
       data.title,
       data.subtitle || '',
-      data.discount_amount || 0,
-      data.min_order_amount || 0,
-      data.points_spent || 0,
+      category,
+      benefitType,
+      discountType,
+      discountAmount,
+      maxDiscount,
+      minOrderAmount,
+      pointsSpent,
+      startDate,
+      endDate,
       creatorVal,
     ]);
 
@@ -556,9 +593,15 @@ export class UserRepository {
       code: cleanCode,
       title: data.title,
       subtitle: data.subtitle || '',
-      discount_amount: data.discount_amount || 0,
-      min_order_amount: data.min_order_amount || 0,
-      points_spent: data.points_spent || 0,
+      category,
+      benefit_type: benefitType,
+      discount_type: discountType,
+      discount_amount: discountAmount,
+      max_discount: maxDiscount,
+      min_order_amount: minOrderAmount,
+      points_spent: pointsSpent,
+      start_date: startDate,
+      end_date: endDate,
       is_used: false,
       created_at: new Date(),
     };
@@ -577,9 +620,15 @@ export class UserRepository {
         code_voucher,
         title,
         subtitle,
+        category,
+        benefit_type,
+        discount_type,
         discount_amount,
+        max_discount,
         min_order_amount,
         points_spent,
+        DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
+        DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date,
         is_used,
         used_at,
         orders_id,
@@ -588,7 +637,7 @@ export class UserRepository {
       WHERE users_id = ? AND UPPER(code_voucher) = ? AND deleted_at IS NULL
     `;
     if (activeOnly) {
-      sql += ' AND is_used = 0';
+      sql += ' AND is_used = 0 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())';
     }
     sql += ' ORDER BY id_user_vouchers DESC LIMIT 1';
 
@@ -604,9 +653,15 @@ export class UserRepository {
       users_id: r.users_id,
       code: r.code_voucher,
       code_voucher: r.code_voucher,
+      category: r.category || 'reward_point',
+      benefit_type: r.benefit_type || 'service_discount',
+      discount_type: r.discount_type || 'fixed',
       discount_amount: Number(r.discount_amount) || 0,
+      max_discount: r.max_discount !== null && r.max_discount !== undefined ? Number(r.max_discount) : null,
       min_order_amount: Number(r.min_order_amount) || 0,
       points_spent: Number(r.points_spent) || 0,
+      start_date: r.start_date || '',
+      end_date: r.end_date || '',
       is_used: Boolean(r.is_used),
       order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
     };
@@ -664,9 +719,15 @@ export interface UserVoucherEntity {
   code?: string;
   title: string;
   subtitle?: string | null;
+  category?: string;
+  benefit_type?: string;
+  discount_type?: string;
   discount_amount: number;
+  max_discount?: number | null;
   min_order_amount: number;
   points_spent: number;
+  start_date?: string;
+  end_date?: string;
   is_used: boolean | number;
   used_at?: Date | string | null;
   orders_id?: number | string | null;

@@ -135,8 +135,39 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
       console.warn('  ▲ [Migration Info] wallet_transactions table check:', e.message);
     }
 
-    // Auto-create user_vouchers table if not exists
+    // Auto-create & migrate promos & user_vouchers table
     try {
+      // 1. Check promos columns (tanpa DEFAULT)
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN category VARCHAR(50) NOT NULL AFTER code`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN benefit_type VARCHAR(50) NOT NULL AFTER category`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN discount_type VARCHAR(50) NOT NULL AFTER benefit_type`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN max_discount INT NULL AFTER discount_amount`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN points_required INT NOT NULL AFTER min_order_amount`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN start_date DATE NOT NULL AFTER points_required`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos ADD COLUMN end_date DATE NOT NULL AFTER start_date`); } catch (_) {}
+
+      // Pastikan semua kolom promos tidak memiliki DEFAULT constraint
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN category VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN benefit_type VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN discount_type VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN discount_amount INT NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN max_discount INT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN min_order_amount INT NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN points_required INT NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN start_date DATE NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE promos MODIFY COLUMN end_date DATE NOT NULL`); } catch (_) {}
+      
+      // Update any existing promos without start_date / end_date
+      try {
+        await connection.query(`
+          UPDATE promos 
+          SET start_date = COALESCE(start_date, CURDATE()), 
+              end_date = COALESCE(end_date, DATE_ADD(CURDATE(), INTERVAL 90 DAY))
+          WHERE start_date IS NULL OR end_date IS NULL
+        `);
+      } catch (_) {}
+
+      // 2. Check user_vouchers table and columns (tanpa DEFAULT)
       await connection.query(`
         CREATE TABLE IF NOT EXISTS user_vouchers (
           id_user_vouchers INT AUTO_INCREMENT PRIMARY KEY,
@@ -145,10 +176,16 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
           code_voucher VARCHAR(50) NOT NULL,
           title VARCHAR(150) NOT NULL,
           subtitle VARCHAR(255) NULL,
-          discount_amount INT NOT NULL DEFAULT 0,
-          min_order_amount INT NOT NULL DEFAULT 0,
-          points_spent INT NOT NULL DEFAULT 0,
-          is_used BOOLEAN NOT NULL DEFAULT FALSE,
+          category VARCHAR(50) NOT NULL,
+          benefit_type VARCHAR(50) NOT NULL,
+          discount_type VARCHAR(50) NOT NULL,
+          discount_amount INT NOT NULL,
+          max_discount INT NULL,
+          min_order_amount INT NOT NULL,
+          points_spent INT NOT NULL,
+          start_date DATE NOT NULL,
+          end_date DATE NOT NULL,
+          is_used BOOLEAN NOT NULL,
           used_at DATETIME NULL,
           orders_id INT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -161,9 +198,75 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
           INDEX idx_user_vouchers_code (code_voucher)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
       `);
-      try { await connection.query(`ALTER TABLE promos ADD COLUMN points_required INT NOT NULL DEFAULT 0 AFTER min_order_amount`); } catch (_) {}
+
+      try { await connection.query(`ALTER TABLE user_vouchers ADD COLUMN category VARCHAR(50) NOT NULL AFTER subtitle`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers ADD COLUMN benefit_type VARCHAR(50) NOT NULL AFTER category`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers ADD COLUMN discount_type VARCHAR(50) NOT NULL AFTER benefit_type`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers ADD COLUMN max_discount INT NULL AFTER discount_amount`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers ADD COLUMN start_date DATE NOT NULL AFTER points_spent`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers ADD COLUMN end_date DATE NOT NULL AFTER start_date`); } catch (_) {}
+
+      // Pastikan semua kolom user_vouchers tidak memiliki DEFAULT constraint
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN category VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN benefit_type VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN discount_type VARCHAR(50) NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN discount_amount INT NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN max_discount INT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN min_order_amount INT NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN points_spent INT NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN start_date DATE NOT NULL`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE user_vouchers MODIFY COLUMN end_date DATE NOT NULL`); } catch (_) {}
+
+      // Normalisasi nilai kolom ke format standar Title Case (tanpa underscore)
+      try {
+        await connection.query(`
+          UPDATE promos SET category = 'Event' WHERE category IN ('event', 'Event');
+        `);
+        await connection.query(`
+          UPDATE promos SET category = 'Reward Point' WHERE category IN ('reward_point', 'reward point', 'Reward Point');
+        `);
+        await connection.query(`
+          UPDATE promos SET benefit_type = 'Potongan Harga' WHERE benefit_type IN ('service_discount', 'service discount', 'potongan_harga', 'potongan harga', 'Potongan Harga');
+        `);
+        await connection.query(`
+          UPDATE promos SET benefit_type = 'Bebas Ongkir' WHERE benefit_type IN ('free_delivery', 'free delivery', 'bebas_ongkir', 'bebas ongkir', 'Bebas Ongkir');
+        `);
+        await connection.query(`
+          UPDATE promos SET benefit_type = 'Potongan Ongkir' WHERE benefit_type IN ('delivery_discount', 'delivery discount', 'potongan_ongkir', 'potongan ongkir', 'Potongan Ongkir');
+        `);
+        await connection.query(`
+          UPDATE promos SET discount_type = 'Nominal' WHERE discount_type IN ('fixed', 'nominal', 'Nominal');
+        `);
+        await connection.query(`
+          UPDATE promos SET discount_type = 'Persen' WHERE discount_type IN ('percent', 'percentage', 'persen', 'Persen');
+        `);
+      } catch (_) {}
+
+      try {
+        await connection.query(`
+          UPDATE user_vouchers SET category = 'Event' WHERE category IN ('event', 'Event');
+        `);
+        await connection.query(`
+          UPDATE user_vouchers SET category = 'Reward Point' WHERE category IN ('reward_point', 'reward point', 'Reward Point');
+        `);
+        await connection.query(`
+          UPDATE user_vouchers SET benefit_type = 'Potongan Harga' WHERE benefit_type IN ('service_discount', 'service discount', 'potongan_harga', 'potongan harga', 'Potongan Harga');
+        `);
+        await connection.query(`
+          UPDATE user_vouchers SET benefit_type = 'Bebas Ongkir' WHERE benefit_type IN ('free_delivery', 'free delivery', 'bebas_ongkir', 'bebas ongkir', 'Bebas Ongkir');
+        `);
+        await connection.query(`
+          UPDATE user_vouchers SET benefit_type = 'Potongan Ongkir' WHERE benefit_type IN ('delivery_discount', 'delivery discount', 'potongan_ongkir', 'potongan ongkir', 'Potongan Ongkir');
+        `);
+        await connection.query(`
+          UPDATE user_vouchers SET discount_type = 'Nominal' WHERE discount_type IN ('fixed', 'nominal', 'Nominal');
+        `);
+        await connection.query(`
+          UPDATE user_vouchers SET discount_type = 'Persen' WHERE discount_type IN ('percent', 'percentage', 'persen', 'Persen');
+        `);
+      } catch (_) {}
     } catch (e: any) {
-      console.warn('  ▲ [Migration Info] user_vouchers table check:', e.message);
+      console.warn('  ▲ [Migration Info] promos & user_vouchers table check:', e.message);
     }
 
     // Auto-create master_outlets table if not exists

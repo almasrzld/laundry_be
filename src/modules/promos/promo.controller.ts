@@ -14,7 +14,15 @@ export class PromoController {
   getPromos = async (req: Request, res: Response): Promise<void> => {
     try {
       const search = req.query.search as string | undefined;
-      const promos = await this.promoService.getAllPromos(search);
+      const category = (req.query.category as string | undefined) || (req.query.type as string | undefined);
+      const activeParam = req.query.active || req.query.active_only || req.query.activeOnly;
+      const activeOnly = activeParam === 'true' || activeParam === '1';
+
+      const promos = await this.promoService.getAllPromos({
+        search,
+        category,
+        activeOnly,
+      });
       sendSuccess(res, promos, 'Daftar promo berhasil diambil');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal mengambil promo', 500);

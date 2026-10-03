@@ -85,9 +85,15 @@ export class UserService {
       title?: string;
       subtitle?: string;
       description?: string;
+      category?: string;
+      benefit_type?: string;
+      discount_type?: string;
       discount_amount?: number;
+      max_discount?: number | null;
       min_order_amount?: number;
       promos_id?: number | null;
+      start_date?: string;
+      end_date?: string;
     } | number,
     titleParam?: string,
     descriptionParam?: string
@@ -111,7 +117,13 @@ export class UserService {
     const title = typeof data === 'object' ? (data.title || titleParam) : titleParam;
     const subtitle = typeof data === 'object' ? (data.subtitle || data.description || descriptionParam) : descriptionParam;
     const discountAmount = typeof data === 'object' ? (Number(data.discount_amount) || 0) : 0;
+    const maxDiscount = typeof data === 'object' && data.max_discount !== undefined && data.max_discount !== null ? Number(data.max_discount) : null;
     const minOrderAmount = typeof data === 'object' ? (Number(data.min_order_amount) || 0) : 0;
+    const category = typeof data === 'object' ? (data.category || 'reward_point') : 'reward_point';
+    const benefitType = typeof data === 'object' ? (data.benefit_type || 'service_discount') : 'service_discount';
+    const discountType = typeof data === 'object' ? (data.discount_type || 'fixed') : 'fixed';
+    const startDate = typeof data === 'object' ? data.start_date : undefined;
+    const endDate = typeof data === 'object' ? data.end_date : undefined;
     const promosId = typeof data === 'object' ? data.promos_id : null;
 
     const finalCode = (rawCode || `REWARD-${points}PTS-${Date.now().toString().slice(-4)}`).toUpperCase();
@@ -134,10 +146,16 @@ export class UserService {
       code_voucher: finalCode,
       title: finalTitle,
       subtitle: finalSubtitle,
+      category,
+      benefit_type: benefitType,
+      discount_type: discountType,
       discount_amount: discountAmount > 0 ? discountAmount : (points === 50 ? 10000 : points === 100 ? 10000 : points === 200 ? 20000 : points === 300 ? 15000 : points * 100),
-      min_order_amount: minOrderAmount > 0 ? minOrderAmount : (points === 50 ? 25000 : points === 100 ? 30000 : points === 200 ? 50000 : points === 300 ? 40000 : 0),
+      max_discount: maxDiscount,
+      min_order_amount: minOrderAmount,
       points_spent: points,
       promos_id: promosId,
+      start_date: startDate,
+      end_date: endDate,
     });
 
     return {
