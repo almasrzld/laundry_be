@@ -3,8 +3,10 @@ import { PaymentRepository, PaymentTransactionEntity } from './payment.repositor
 import { OrderRepository } from '../orders/order.repository';
 import { NotificationService } from '../notifications/notification.service';
 import { SystemRepository } from '../system/system.repository';
+import { UserRepository } from '../user/user.repository';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { ImageUtil } from '../../utils/image.util';
+import { query } from '../../config/database';
 
 export class PaymentService {
   private xenditService: XenditService;
@@ -12,19 +14,22 @@ export class PaymentService {
   private orderRepository: OrderRepository;
   private notificationService: NotificationService;
   private systemRepository: SystemRepository;
+  private userRepository: UserRepository;
 
   constructor(
     xenditService?: XenditService,
     paymentRepository?: PaymentRepository,
     orderRepository?: OrderRepository,
     notificationService?: NotificationService,
-    systemRepository?: SystemRepository
+    systemRepository?: SystemRepository,
+    userRepository?: UserRepository
   ) {
     this.xenditService = xenditService || new XenditService();
     this.paymentRepository = paymentRepository || new PaymentRepository();
     this.orderRepository = orderRepository || new OrderRepository();
     this.notificationService = notificationService || new NotificationService();
     this.systemRepository = systemRepository || new SystemRepository();
+    this.userRepository = userRepository || new UserRepository();
   }
 
   /**
@@ -518,30 +523,170 @@ export class PaymentService {
     }
 
     const tx = await this.paymentRepository.getTransactionByOrderId(orderId);
-    if (!tx) {
-      const order = await this.orderRepository.findById(orderId);
-      const isLPay = order?.notes?.toLowerCase().includes('laundrypay') || order?.notes?.toLowerCase().includes('saldo');
-      const isFree = order?.notes?.toLowerCase().includes('lunas (voucher & poin)');
-      if (isLPay || isFree) {
-        const orderAmount = Math.max(0, ((order?.quantity || 1) * (order?.price_per_unit || 0)) + (order?.delivery_fee || 0) - (order?.discount || 0));
-        return {
-          order_id: CryptoUtil.encryptId(orderId),
-          status: 'PAID',
-          paid_at: order?.order_date || new Date(),
-          amount: orderAmount,
-          payment_method: isLPay ? 'Saldo LaundryPay' : 'Voucher & Poin',
-          proof_image: null,
-        };
-      }
+    const order = await this.orderRepository.findById(orderId);
+    const notesLower = (order?.notes || '').toLowerCase();
+    const isLunasInNotes = notesLower.includes('lunas');
+    const isFree = notesLower.includes('lunas (voucher & poin)');
+
+    // Cek apakah ada record debit pembayaran di wallet_transactions
+    let hasWalletDebit = false;
+    if (order?.invoice_no) {
+      const walletDebit = await query<any>(
+        "SELECT id_wallet_transactions FROM wallet_transactions WHERE type = 'debit' AND (reference_id = ? OR description LIKE ?) AND deleted_at IS NULL LIMIT 1",
+        [order.invoice_no, `%${order.invoice_no}%`]
+      );
+      hasWalletDebit = Boolean(walletDebit && walletDebit.length > 0);
     }
+
+    const isPaidLPay = notesLower.includes('laundrypay') && (isLunasInNotes || hasWalletDebit);
+
+    if (tx?.status === 'PAID' || isPaidLPay || isFree || isLunasInNotes) {
+      const orderAmount = tx?.amount ?? Math.max(0, ((order?.quantity || 1) * (order?.price_per_unit || 0)) + (order?.delivery_fee || 0) - (order?.discount || 0));
+      return {
+        order_id: CryptoUtil.encryptId(orderId),
+        status: 'PAID',
+        paid_at: tx?.paid_at || order?.order_date || new Date(),
+        amount: orderAmount,
+        payment_method: tx?.payment_method || (isPaidLPay ? 'Saldo LaundryPay' : (isFree ? 'Voucher & Poin' : 'TRANSFER_BANK')),
+        proof_image: tx?.proof_image || null,
+      };
+    }
+
+    // Jika belum dibayar, cek apakah kiloan dan belum ditimbang
+    const isKiloan = (order?.unit || '').toLowerCase() === 'kg' || (order?.service_type || '').toLowerCase().includes('kilo');
+    const isWaitingWeighing = isKiloan && Number(order?.quantity || 0) <= 0;
 
     return {
       order_id: CryptoUtil.encryptId(orderId),
-      status: tx?.status || 'UNPAID',
-      paid_at: tx?.paid_at || null,
-      amount: tx?.amount || 0,
-      payment_method: tx?.payment_method || 'TRANSFER_BANK',
+      status: isWaitingWeighing ? 'WAITING_WEIGHING' : (tx?.status || 'UNPAID'),
+      paid_at: null,
+      amount: Math.max(0, ((order?.quantity || 0) * (order?.price_per_unit || 0)) + (order?.delivery_fee || 0) - (order?.discount || 0)),
+      payment_method: tx?.payment_method || (notesLower.includes('laundrypay') ? 'Saldo LaundryPay' : (notesLower.includes('tunai') || notesLower.includes('cod') ? 'Tunai / COD' : 'TRANSFER_BANK')),
       proof_image: tx?.proof_image || null,
+      is_waiting_weighing: isWaitingWeighing,
+    };
+  }
+
+  /**
+   * Bayar pesanan yang sudah ditimbang menggunakan Saldo LaundryPay
+   */
+  async payWithLaundryPay(orderIdRaw: string | number, userIdRaw?: string | number): Promise<any> {
+    const orderId = typeof orderIdRaw === 'string'
+      ? (CryptoUtil.decryptId(orderIdRaw) || parseInt(orderIdRaw, 10))
+      : orderIdRaw;
+
+    if (!orderId || isNaN(orderId)) {
+      throw new Error('ID Pesanan tidak valid');
+    }
+
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new Error('Pesanan tidak ditemukan');
+    }
+
+    const notesLower = (order.notes || '').toLowerCase();
+    if (notesLower.includes('lunas')) {
+      throw new Error('Pesanan ini sudah dibayar (Lunas).');
+    }
+
+    const quantity = Number(order.quantity) || 0;
+    const isKiloan = (order.unit || '').toLowerCase() === 'kg' || (order.service_type || '').toLowerCase().includes('kilo');
+    if (quantity <= 0 && isKiloan) {
+      throw new Error('Pesanan belum ditimbang oleh pihak laundry. Pembayaran dapat dilakukan setelah proses penimbangan selesai.');
+    }
+
+    const grandTotal = Math.max(0, (quantity * Number(order.price_per_unit || 0)) + Number(order.delivery_fee || 0) - Number(order.discount || 0));
+    if (grandTotal <= 0) {
+      throw new Error('Total tagihan pesanan Rp 0.');
+    }
+
+    const numericUserId = userIdRaw
+      ? (typeof userIdRaw === 'string' ? (CryptoUtil.decryptId(userIdRaw) || parseInt(userIdRaw, 10)) : Number(userIdRaw))
+      : (order.users_id ? (CryptoUtil.decryptId(order.users_id) || Number(order.users_id)) : null);
+
+    if (!numericUserId) {
+      throw new Error('Pengguna tidak valid');
+    }
+
+    const userRes = await query<any>(
+      'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+      [numericUserId]
+    );
+    if (!userRes || userRes.length === 0) {
+      throw new Error('Akun pengguna tidak ditemukan atau tidak aktif');
+    }
+
+    const currentBalance = Number(userRes[0].laundry_pay_balance) || 0;
+    if (currentBalance < grandTotal) {
+      const shortage = grandTotal - currentBalance;
+      throw new Error(
+        `Saldo LaundryPay Anda tidak mencukupi. Saldo saat ini Rp ${currentBalance.toLocaleString('id-ID')}, kurang Rp ${shortage.toLocaleString('id-ID')} dari total tagihan Rp ${grandTotal.toLocaleString('id-ID')}. Silakan lakukan top-up saldo terlebih dahulu.`
+      );
+    }
+
+    const debitResult = await this.userRepository.deductLaundryPayBalance(
+      numericUserId,
+      grandTotal,
+      orderId,
+      order.invoice_no,
+      `Pembayaran Pesanan #${order.invoice_no}`,
+      `Pembayaran pesanan ${order.service_name} #${order.invoice_no} menggunakan Saldo LaundryPay`
+    );
+
+    // Update order notes to mark as paid
+    const updatedNotes = `${order.notes || ''} [LUNAS VIA LAUNDRYPAY]`.trim();
+    await this.orderRepository.updateOrder(orderId, { notes: updatedNotes });
+
+    // Mark as paid in payment transactions
+    await this.paymentRepository.markOrderAsPaid(orderId, 'Saldo LaundryPay');
+
+    // Send notification
+    try {
+      await this.notificationService.createNotification({
+        users_id: numericUserId,
+        orders_id: orderId,
+        title: 'Pembayaran Saldo LaundryPay Berhasil',
+        message: `Pembayaran pesanan #${order.invoice_no} sebesar Rp ${grandTotal.toLocaleString('id-ID')} menggunakan Saldo LaundryPay berhasil. Sisa saldo aktif Anda sekarang Rp ${debitResult.balanceAfter.toLocaleString('id-ID')}.`,
+        type: 'payment_success',
+      });
+    } catch (_) {}
+
+    return {
+      success: true,
+      message: `Pembayaran pesanan #${order.invoice_no} sebesar Rp ${grandTotal.toLocaleString('id-ID')} berhasil menggunakan Saldo LaundryPay!`,
+      balance_after: debitResult.balanceAfter,
+      status: 'PAID',
+    };
+  }
+
+  /**
+   * Mengubah preferensi metode pembayaran pesanan (misal ganti ke Tunai / COD)
+   */
+  async switchPaymentMethod(orderIdRaw: string | number, paymentMethod: string): Promise<any> {
+    const orderId = typeof orderIdRaw === 'string'
+      ? (CryptoUtil.decryptId(orderIdRaw) || parseInt(orderIdRaw, 10))
+      : orderIdRaw;
+
+    if (!orderId || isNaN(orderId)) {
+      throw new Error('ID Pesanan tidak valid');
+    }
+
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new Error('Pesanan tidak ditemukan');
+    }
+
+    let cleanNotes = (order.notes || '')
+      .replace(/\[Metode:.*?\]/gi, '')
+      .replace(/\[Metode Pembayaran:.*?\]/gi, '')
+      .trim();
+
+    cleanNotes = `${cleanNotes} [Metode Pembayaran: ${paymentMethod}]`.trim();
+    await this.orderRepository.updateOrder(orderId, { notes: cleanNotes });
+
+    return {
+      success: true,
+      message: `Metode pembayaran berhasil dialihkan ke ${paymentMethod}.`,
     };
   }
 

@@ -142,15 +142,24 @@ export class OrderService {
       notesLower.includes('metode pembayaran: saldo laundrypay') ||
       notesLower.includes('metode pembayaran: laundrypay');
 
-    const quantityNum = Number(data.quantity) || 1.0;
+    const isKiloan = (data.unit || '').toLowerCase() === 'kg' || (data.service_type || '').toLowerCase().includes('kilo');
+    const quantityNum = (data.quantity !== undefined && data.quantity !== null && Number(data.quantity) > 0)
+      ? Number(data.quantity)
+      : (isKiloan ? 0 : 1.0);
+
     const priceNum = Number(data.price_per_unit) || 0;
     const deliveryFeeNum = Number(data.delivery_fee) || 0;
     const discountNum = Number(data.discount) || 0;
     const pointsNum = Number(data.points_redeemed) || 0;
-    const grandTotal = Math.max(0, (quantityNum * priceNum) + deliveryFeeNum - discountNum - pointsNum);
 
-    // If LaundryPay is selected and grandTotal > 0, validate user balance beforehand
-    if (isLaundryPay && grandTotal > 0 && numericUserId) {
+    // Untuk layanan kiloan yang belum ditimbang, total di muka adalah 0 (pembayaran setelah ditimbang & dipacking)
+    const isWaitingWeighing = isKiloan && quantityNum <= 0;
+    const grandTotal = isWaitingWeighing
+      ? 0
+      : Math.max(0, (quantityNum * priceNum) + deliveryFeeNum - discountNum - pointsNum);
+
+    // If LaundryPay is selected and grandTotal > 0, validate user balance beforehand (hanya untuk layanan yang langsung bayar)
+    if (!isWaitingWeighing && isLaundryPay && grandTotal > 0 && numericUserId) {
       const userRes = await query<any>(
         'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
         [numericUserId]
@@ -167,12 +176,18 @@ export class OrderService {
       }
     }
 
+    let initialNotes = data.notes || '';
+    if (isWaitingWeighing) {
+      const pref = data.payment_method || (isLaundryPay ? 'Saldo LaundryPay' : 'Menunggu Penimbangan');
+      initialNotes = `${initialNotes} [Preferensi Pembayaran: ${pref} (Menunggu Penimbangan)]`.trim();
+    }
+
     const newOrder: OrderEntity = {
       invoice_no: invoiceNo,
       users_id: rawUserId,
       user_id: rawUserId,
       service_name: data.service_name,
-      service_type: data.service_type || 'Kiloan',
+      service_type: data.service_type || (isKiloan ? 'Kiloan' : 'Satuan'),
       order_date: now.toISOString(),
       estimated_completion_date: data.estimated_completion_date
         ? new Date(data.estimated_completion_date).toISOString()
@@ -180,7 +195,7 @@ export class OrderService {
       status: data.status || '',
       order_statuses_id: data.order_statuses_id || null,
       quantity: quantityNum,
-      unit: data.unit || 'kg',
+      unit: data.unit || (isKiloan ? 'kg' : 'pcs'),
       price_per_unit: priceNum,
       delivery_fee: deliveryFeeNum,
       discount: discountNum,
@@ -188,7 +203,7 @@ export class OrderService {
       delivery_address: data.delivery_address || data.pickup_address,
       courier_name: data.courier_name || '',
       courier_phone: data.courier_phone || '',
-      notes: data.notes || '',
+      notes: initialNotes,
     };
 
     const created = await this.orderRepository.create(newOrder, creatorPic || undefined);
@@ -217,8 +232,8 @@ export class OrderService {
       }
     }
 
-    // Potong saldo LaundryPay jika metode pembayaran adalah LaundryPay
-    if (isLaundryPay && grandTotal > 0 && numericUserId) {
+    // Potong saldo LaundryPay jika metode pembayaran adalah LaundryPay dan BUKAN menunggu timbang
+    if (!isWaitingWeighing && isLaundryPay && grandTotal > 0 && numericUserId) {
       try {
         const debitResult = await this.userRepository.deductLaundryPayBalance(
           numericUserId,
@@ -314,7 +329,83 @@ export class OrderService {
       console.warn('[Notification Warning] Gagal membuat notifikasi status siap/selesai:', notifErr);
     }
 
-    // 4. Trigger Reward Points: Otomatis jika status Pesanan Selesai
+    // 4. Trigger Penimbangan & Pembayaran Otomatis (Auto-Debit Saldo LaundryPay jika dipilih)
+    try {
+      const oldQty = Number(existingOrder?.quantity) || 0;
+      const newQty = Number(data.quantity);
+      const isWeightInputted = newQty > 0 && (oldQty <= 0 || newQty !== oldQty);
+
+      if (isWeightInputted) {
+        const priceNum = Number(updated.price_per_unit) || 0;
+        const deliveryFeeNum = Number(updated.delivery_fee) || 0;
+        const discountNum = Number(updated.discount) || 0;
+        const newGrandTotal = Math.max(0, (newQty * priceNum) + deliveryFeeNum - discountNum);
+
+        const notesLower = (updated.notes || '').toLowerCase();
+        const isAlreadyPaid = notesLower.includes('lunas');
+        const isPreferredLaundryPay = notesLower.includes('laundrypay') || notesLower.includes('saldo');
+
+        const rawUserId = updated.users_id || updated.user_id;
+        const numericUserId = rawUserId ? (CryptoUtil.decryptId(rawUserId) ?? Number(rawUserId)) : null;
+
+        if (!isAlreadyPaid && isPreferredLaundryPay && numericUserId && newGrandTotal > 0) {
+          const userRes = await query<any>(
+            'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+            [numericUserId]
+          );
+          const currentBalance = userRes && userRes.length > 0 ? Number(userRes[0].laundry_pay_balance) || 0 : 0;
+
+          if (currentBalance >= newGrandTotal) {
+            // Opsi A: Saldo cukup -> Auto-Debit!
+            const debitResult = await this.userRepository.deductLaundryPayBalance(
+              numericUserId,
+              newGrandTotal,
+              updated.id_orders || updated.id,
+              updated.invoice_no,
+              `Pembayaran Pesanan #${updated.invoice_no}`,
+              `Pembayaran otomatis setelah penimbangan (${newQty} ${updated.unit}) menggunakan Saldo LaundryPay`
+            );
+
+            if (debitResult.success) {
+              const updatedNotes = `${updated.notes || ''} [LUNAS VIA LAUNDRYPAY]`.trim();
+              await this.orderRepository.updateOrder(id, { notes: updatedNotes });
+              updated.notes = updatedNotes;
+
+              await this.notificationService.createNotification({
+                users_id: numericUserId,
+                orders_id: updated.id_orders || updated.id,
+                title: 'Pembayaran Saldo LaundryPay Berhasil',
+                message: `Cucian #${updated.invoice_no} selesai ditimbang (${newQty} ${updated.unit}). Total tagihan Rp ${newGrandTotal.toLocaleString('id-ID')} otomatis dipotong dari Saldo LaundryPay. Sisa saldo Anda: Rp ${debitResult.balanceAfter.toLocaleString('id-ID')}.`,
+                type: 'payment_success',
+              });
+            }
+          } else {
+            // Saldo tidak cukup -> Notifikasi shortage dan opsi top up atau pilih metode pembayaran lain
+            const shortage = newGrandTotal - currentBalance;
+            await this.notificationService.createNotification({
+              users_id: numericUserId,
+              orders_id: updated.id_orders || updated.id,
+              title: 'Cucian Selesai Ditimbang - Saldo Tidak Cukup',
+              message: `Cucian #${updated.invoice_no} selesai ditimbang (${newQty} ${updated.unit}) dengan total tagihan Rp ${newGrandTotal.toLocaleString('id-ID')}. Saldo LaundryPay Anda (Rp ${currentBalance.toLocaleString('id-ID')}) kurang Rp ${shortage.toLocaleString('id-ID')}. Silakan top-up saldo atau pilih metode pembayaran lain di aplikasi.`,
+              type: 'order_status',
+            });
+          }
+        } else if (!isAlreadyPaid && isWeightInputted && numericUserId && newGrandTotal > 0) {
+          // Bukan LaundryPay -> Notifikasi bahwa cucian sudah ditimbang dan tagihan siap dibayar
+          await this.notificationService.createNotification({
+            users_id: numericUserId,
+            orders_id: updated.id_orders || updated.id,
+            title: 'Cucian Selesai Ditimbang',
+            message: `Cucian #${updated.invoice_no} selesai ditimbang (${newQty} ${updated.unit}) dengan total tagihan Rp ${newGrandTotal.toLocaleString('id-ID')}. Silakan lakukan pembayaran pada detail pesanan Anda.`,
+            type: 'order_status',
+          });
+        }
+      }
+    } catch (weighErr) {
+      console.warn('[OrderService Warning] Gagal memproses penimbangan otomatis:', weighErr);
+    }
+
+    // 5. Trigger Reward Points: Otomatis jika status Pesanan Selesai
     await this.awardRewardPointsIfCompleted(updated, existingOrder?.status);
 
     return this.formatOrder(updated);

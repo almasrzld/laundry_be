@@ -150,6 +150,45 @@ export class PaymentController {
   };
 
   /**
+   * POST /api/payments/pay-with-laundrypay
+   * Bayar pesanan yang sudah ditimbang menggunakan Saldo LaundryPay
+   */
+  payWithLaundryPay = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { order_id } = req.body;
+      const userId = req.user?.id;
+      if (!order_id) {
+        sendError(res, 'order_id wajib disertakan', 400);
+        return;
+      }
+
+      const result = await this.paymentService.payWithLaundryPay(order_id, userId);
+      sendSuccess(res, result, 'Pembayaran dengan Saldo LaundryPay berhasil', 200);
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal memproses pembayaran Saldo LaundryPay', 400);
+    }
+  };
+
+  /**
+   * POST /api/payments/switch-method
+   * Ganti metode pembayaran pesanan (misal ke Tunai / COD)
+   */
+  switchPaymentMethod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { order_id, payment_method } = req.body;
+      if (!order_id || !payment_method) {
+        sendError(res, 'order_id dan payment_method wajib disertakan', 400);
+        return;
+      }
+
+      const result = await this.paymentService.switchPaymentMethod(order_id, payment_method);
+      sendSuccess(res, result, 'Metode pembayaran pesanan berhasil diubah', 200);
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengubah metode pembayaran', 400);
+    }
+  };
+
+  /**
    * POST /api/webhooks/xendit
    */
   handleWebhook = async (req: Request, res: Response): Promise<void> => {

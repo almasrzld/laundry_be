@@ -9,6 +9,8 @@ const controller = new PaymentController();
 // Private Endpoints (Memerlukan Token Pengguna)
 router.post('/proof', authMiddleware, uploadPaymentProofMiddleware, controller.uploadPaymentProof);
 router.post('/confirm', authMiddleware, controller.confirmManualPayment);
+router.post('/pay-with-laundrypay', authMiddleware, controller.payWithLaundryPay);
+router.post('/switch-method', authMiddleware, controller.switchPaymentMethod);
 router.get('/status/:orderId', authMiddleware, controller.getPaymentStatus);
 
 // Xendit Endpoints
