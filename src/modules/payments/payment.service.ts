@@ -589,6 +589,26 @@ export class PaymentService {
       throw new Error('Pesanan ini sudah dibayar (Lunas).');
     }
 
+    const numericOrderId = CryptoUtil.decryptId(orderId) || (typeof orderId === 'number' ? orderId : parseInt(orderId as string, 10)) || order.id_orders || order.id;
+
+    // Cek apakah pesanan ini sudah pernah dipotong di wallet_transactions sebelumnya
+    const existingDebit = await query<any>(
+      'SELECT id_wallet_transactions FROM wallet_transactions WHERE orders_id = ? AND type = "debit" AND deleted_at IS NULL LIMIT 1',
+      [numericOrderId]
+    );
+    if (existingDebit && existingDebit.length > 0) {
+      throw new Error('Pesanan ini sudah pernah dibayar menggunakan Saldo LaundryPay.');
+    }
+
+    // Cek apakah transaksi pembayaran berstatus PAID
+    const existingPayment = await query<any>(
+      'SELECT id_payment_transactions FROM payment_transactions WHERE orders_id = ? AND status = "PAID" AND deleted_at IS NULL LIMIT 1',
+      [numericOrderId]
+    );
+    if (existingPayment && existingPayment.length > 0) {
+      throw new Error('Pesanan ini sudah lunas.');
+    }
+
     const quantity = Number(order.quantity) || 0;
     const isKiloan = (order.unit || '').toLowerCase() === 'kg' || (order.service_type || '').toLowerCase().includes('kilo');
     if (quantity <= 0 && isKiloan) {

@@ -3,6 +3,7 @@ import { CryptoUtil } from '../../utils/crypto.util';
 import { InvoiceGeneratorUtil } from '../../utils/invoice-generator.util';
 import { NotificationService } from '../notifications/notification.service';
 import { UserRepository } from '../user/user.repository';
+import { PaymentRepository } from '../payments/payment.repository';
 import { query } from '../../config/database';
 
 export class OrderService {
@@ -246,6 +247,12 @@ export class OrderService {
 
         if (debitResult.success) {
           try {
+            const paymentRepo = new PaymentRepository();
+            await paymentRepo.markOrderAsPaid(Number(createdOrderId), 'Saldo LaundryPay');
+            created.notes = `${created.notes || initialNotes} • [LUNAS via Saldo LaundryPay]`.trim();
+          } catch (_) {}
+
+          try {
             await this.notificationService.createNotification({
               users_id: numericUserId,
               orders_id: createdOrderId,
@@ -347,8 +354,16 @@ export class OrderService {
 
         const rawUserId = updated.users_id || updated.user_id;
         const numericUserId = rawUserId ? (CryptoUtil.decryptId(rawUserId) ?? Number(rawUserId)) : null;
+        const numericOrderId = updated.id_orders || updated.id;
 
-        if (!isAlreadyPaid && isPreferredLaundryPay && numericUserId && newGrandTotal > 0) {
+        // Cek apakah pesanan ini sudah pernah dipotong di wallet_transactions sebelumnya
+        const existingDebit = await query<any>(
+          'SELECT id_wallet_transactions FROM wallet_transactions WHERE orders_id = ? AND type = "debit" AND deleted_at IS NULL LIMIT 1',
+          [numericOrderId]
+        );
+        const hasExistingDebit = existingDebit && existingDebit.length > 0;
+
+        if (!isAlreadyPaid && !hasExistingDebit && isPreferredLaundryPay && numericUserId && newGrandTotal > 0) {
           const userRes = await query<any>(
             'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
             [numericUserId]
@@ -360,14 +375,18 @@ export class OrderService {
             const debitResult = await this.userRepository.deductLaundryPayBalance(
               numericUserId,
               newGrandTotal,
-              updated.id_orders || updated.id,
+              numericOrderId,
               updated.invoice_no,
               `Pembayaran Pesanan #${updated.invoice_no}`,
               `Pembayaran otomatis setelah penimbangan (${newQty} ${updated.unit}) menggunakan Saldo LaundryPay`
             );
 
             if (debitResult.success) {
-              const updatedNotes = `${updated.notes || ''} [LUNAS VIA LAUNDRYPAY]`.trim();
+              try {
+                const paymentRepo = new PaymentRepository();
+                await paymentRepo.markOrderAsPaid(Number(numericOrderId), 'Saldo LaundryPay');
+              } catch (_) {}
+              const updatedNotes = `${updated.notes || ''} • [LUNAS via Saldo LaundryPay]`.trim();
               await this.orderRepository.updateOrder(id, { notes: updatedNotes });
               updated.notes = updatedNotes;
 
