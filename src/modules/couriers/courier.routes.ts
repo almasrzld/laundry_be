@@ -10,5 +10,7 @@ courierRoutes.get('/summary', optionalAuthMiddleware, courierController.getCouri
 courierRoutes.get('/tasks', optionalAuthMiddleware, courierController.getCourierTasks);
 courierRoutes.get('/transactions', optionalAuthMiddleware, courierController.getCourierTransactions);
 courierRoutes.patch('/tasks/:id/status', authMiddleware, courierController.updateTaskStatus);
+courierRoutes.get('/withdrawals', authMiddleware, courierController.getCourierWithdrawals);
+courierRoutes.post('/withdrawals', authMiddleware, courierController.requestWithdrawal);
 
 export default courierRoutes;

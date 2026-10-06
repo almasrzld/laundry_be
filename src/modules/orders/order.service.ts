@@ -113,6 +113,8 @@ export class OrderService {
       discount?: number;
       voucher_code?: string;
       points_redeemed?: number;
+      payment_method?: string;
+      payment_method_code?: string;
       pickup_address: string;
       delivery_address?: string;
       courier_name?: string;
@@ -126,6 +128,44 @@ export class OrderService {
     const now = new Date(data.order_date || Date.now());
     const invoiceNo = await InvoiceGeneratorUtil.generateInvoiceNo({ date: now });
     const rawUserId = data.users_id || data.user_id;
+    const numericUserId = rawUserId ? (CryptoUtil.decryptId(rawUserId) ?? Number(rawUserId)) : null;
+
+    // Check payment method
+    const paymentMethodLower = (data.payment_method || '').toLowerCase();
+    const paymentCodeLower = (data.payment_method_code || '').toLowerCase();
+    const notesLower = (data.notes || '').toLowerCase();
+    const isLaundryPay =
+      paymentMethodLower.includes('laundrypay') ||
+      paymentMethodLower.includes('saldo') ||
+      paymentCodeLower.includes('laundrypay') ||
+      paymentCodeLower.includes('saldo') ||
+      notesLower.includes('metode pembayaran: saldo laundrypay') ||
+      notesLower.includes('metode pembayaran: laundrypay');
+
+    const quantityNum = Number(data.quantity) || 1.0;
+    const priceNum = Number(data.price_per_unit) || 0;
+    const deliveryFeeNum = Number(data.delivery_fee) || 0;
+    const discountNum = Number(data.discount) || 0;
+    const pointsNum = Number(data.points_redeemed) || 0;
+    const grandTotal = Math.max(0, (quantityNum * priceNum) + deliveryFeeNum - discountNum - pointsNum);
+
+    // If LaundryPay is selected and grandTotal > 0, validate user balance beforehand
+    if (isLaundryPay && grandTotal > 0 && numericUserId) {
+      const userRes = await query<any>(
+        'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+        [numericUserId]
+      );
+      if (!userRes || userRes.length === 0) {
+        throw new Error('Akun pengguna tidak ditemukan atau tidak aktif.');
+      }
+      const userBalanceBefore = Number(userRes[0].laundry_pay_balance) || 0;
+      if (userBalanceBefore < grandTotal) {
+        const shortage = grandTotal - userBalanceBefore;
+        throw new Error(
+          `Saldo LaundryPay Anda tidak mencukupi. Saldo saat ini Rp ${userBalanceBefore.toLocaleString('id-ID')}, kurang Rp ${shortage.toLocaleString('id-ID')} dari total pembayaran Rp ${grandTotal.toLocaleString('id-ID')}. Silakan lakukan top-up saldo terlebih dahulu.`
+        );
+      }
+    }
 
     const newOrder: OrderEntity = {
       invoice_no: invoiceNo,
@@ -139,11 +179,11 @@ export class OrderService {
         : new Date(now.getTime() + 48 * 3600 * 1000).toISOString(),
       status: data.status || '',
       order_statuses_id: data.order_statuses_id || null,
-      quantity: Number(data.quantity) || 1.0,
+      quantity: quantityNum,
       unit: data.unit || 'kg',
-      price_per_unit: Number(data.price_per_unit) || 0,
-      delivery_fee: Number(data.delivery_fee) || 0,
-      discount: Number(data.discount) || 0,
+      price_per_unit: priceNum,
+      delivery_fee: deliveryFeeNum,
+      discount: discountNum,
       pickup_address: data.pickup_address,
       delivery_address: data.delivery_address || data.pickup_address,
       courier_name: data.courier_name || '',
@@ -174,6 +214,37 @@ export class OrderService {
         );
       } catch (pErr) {
         console.warn('[OrderService Warning] Gagal memotong poin reward checkout:', pErr);
+      }
+    }
+
+    // Potong saldo LaundryPay jika metode pembayaran adalah LaundryPay
+    if (isLaundryPay && grandTotal > 0 && numericUserId) {
+      try {
+        const debitResult = await this.userRepository.deductLaundryPayBalance(
+          numericUserId,
+          grandTotal,
+          createdOrderId,
+          created.invoice_no,
+          `Pembayaran Pesanan #${created.invoice_no}`,
+          `Pembayaran pesanan ${data.service_name} #${created.invoice_no} menggunakan Saldo LaundryPay`
+        );
+
+        if (debitResult.success) {
+          try {
+            await this.notificationService.createNotification({
+              users_id: numericUserId,
+              orders_id: createdOrderId,
+              title: 'Pembayaran Saldo LaundryPay Berhasil',
+              message: `Pembayaran pesanan #${created.invoice_no} sebesar Rp ${grandTotal.toLocaleString('id-ID')} menggunakan Saldo LaundryPay berhasil. Sisa saldo aktif Anda sekarang Rp ${debitResult.balanceAfter.toLocaleString('id-ID')}.`,
+              type: 'payment_success',
+            });
+          } catch (notifErr) {
+            console.warn('[OrderService Warning] Gagal membuat notifikasi pembayaran LaundryPay:', notifErr);
+          }
+        }
+      } catch (lpayErr: any) {
+        console.error('[OrderService Error] Gagal memotong saldo LaundryPay:', lpayErr);
+        throw lpayErr;
       }
     }
 

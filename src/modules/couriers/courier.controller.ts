@@ -3,6 +3,17 @@ import { CourierService } from './courier.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { isCourierRole } from '../../utils/role.util';
+import { CryptoUtil } from '../../utils/crypto.util';
+
+const resolveNumericUserId = (u: any): number | null => {
+  if (!u) return null;
+  const rawId = u.id_users ?? u.id;
+  if (!rawId) return null;
+  if (typeof rawId === 'string') {
+    return CryptoUtil.decryptId(rawId) ?? (parseInt(rawId, 10) || null);
+  }
+  return Number(rawId) || null;
+};
 
 export class CourierController {
   private courierService: CourierService;
@@ -33,7 +44,7 @@ export class CourierController {
         if (isCour) {
           courierName = u.name || u.name_users || courierName;
           courierPhone = u.phone || courierPhone;
-          userId = Number(u.id ?? u.id_users) || null;
+          userId = resolveNumericUserId(u);
         }
       }
 
@@ -120,7 +131,7 @@ export class CourierController {
         if (isCour) {
           courierName = u.name || u.name_users || courierName;
           courierPhone = u.phone || courierPhone;
-          userId = Number(u.id ?? u.id_users) || null;
+          userId = resolveNumericUserId(u);
         }
       }
 
@@ -135,6 +146,58 @@ export class CourierController {
       sendSuccess(res, transactions, 'Riwayat transaksi saldo dan tips kurir berhasil diambil');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal mengambil riwayat transaksi kurir', 500);
+    }
+  };
+
+  requestWithdrawal = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const user = (req as AuthenticatedRequest).user as any;
+      if (!user) {
+        sendError(res, 'Sesi login tidak valid. Silakan login kembali.', 401);
+        return;
+      }
+
+      const userId = resolveNumericUserId(user) ?? (user.id_users ?? user.id);
+      const { amount, bank_name, account_number, account_name, notes } = req.body;
+
+      if (!amount || Number(amount) < 10000) {
+        sendError(res, 'Minimal penarikan dana adalah Rp 10.000', 400);
+        return;
+      }
+
+      if (!bank_name || !account_number || !account_name) {
+        sendError(res, 'Nama bank, nomor rekening, dan nama pemilik rekening wajib diisi', 400);
+        return;
+      }
+
+      const result = await this.courierService.requestWithdrawal(
+        userId,
+        Number(amount),
+        bank_name,
+        account_number,
+        account_name,
+        notes,
+      );
+
+      sendSuccess(res, result, 'Permintaan penarikan dana berhasil diajukan dan sedang diproses admin', 201);
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengajukan penarikan dana', 400);
+    }
+  };
+
+  getCourierWithdrawals = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const user = (req as AuthenticatedRequest).user as any;
+      if (!user) {
+        sendError(res, 'Sesi login tidak valid. Silakan login kembali.', 401);
+        return;
+      }
+
+      const userId = resolveNumericUserId(user) ?? (user.id_users ?? user.id);
+      const data = await this.courierService.getCourierWithdrawals(userId);
+      sendSuccess(res, data, 'Daftar riwayat penarikan dana kurir berhasil diambil');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengambil riwayat penarikan dana', 500);
     }
   };
 }

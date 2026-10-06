@@ -1,6 +1,7 @@
 import { query } from '../../config/database';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { OrderEntity } from '../orders/order.repository';
+import { NotificationRepository } from '../notifications/notification.repository';
 
 export interface CourierEntity {
   id: string;
@@ -326,6 +327,167 @@ export class CourierRepository {
       amount: Number(r.amount) || 0,
       balance_before: Number(r.balance_before) || 0,
       balance_after: Number(r.balance_after) || 0,
+    }));
+  }
+
+  async requestWithdrawal(
+    userId: string | number,
+    amount: number,
+    bankName: string,
+    accountNumber: string,
+    accountName: string,
+    notes?: string,
+  ): Promise<any> {
+    let resolvedUserId: number | null = null;
+    if (typeof userId === 'string') {
+      resolvedUserId = CryptoUtil.decryptId(userId);
+      if (!resolvedUserId && /^\d+$/.test(userId)) {
+        resolvedUserId = parseInt(userId, 10);
+      }
+    } else {
+      resolvedUserId = userId;
+    }
+
+    if (!resolvedUserId) throw new Error('Identitas kurir tidak valid');
+
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount < 10000) {
+      throw new Error('Minimal penarikan dana adalah Rp 10.000');
+    }
+
+    const userRes = await query<any>(
+      'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+      [resolvedUserId],
+    );
+    if (!userRes || userRes.length === 0) {
+      throw new Error('Data kurir tidak ditemukan');
+    }
+
+    const currentBal = Number(userRes[0].laundry_pay_balance) || 0;
+    if (currentBal < numAmount) {
+      throw new Error(`Saldo tidak mencukupi. Saldo saat ini: Rp ${currentBal.toLocaleString('id-ID')}`);
+    }
+
+    const newBal = currentBal - numAmount;
+    await query('UPDATE users SET laundry_pay_balance = ? WHERE id_users = ?', [newBal, resolvedUserId]);
+
+    const ref = `WD-${Date.now()}`;
+    await query(
+      `INSERT INTO wallet_transactions 
+       (users_id, type, category, amount, balance_before, balance_after, title, description, reference_no, created_at)
+       VALUES (?, 'debit', 'withdrawal', ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        resolvedUserId,
+        numAmount,
+        currentBal,
+        newBal,
+        `Penarikan Dana (${bankName})`,
+        `Penarikan ke rekening ${accountNumber} a.n. ${accountName}`,
+        ref,
+      ],
+    );
+
+    const insertRes: any = await query(
+      `INSERT INTO withdrawal_requests 
+       (users_id, amount, bank_name, account_number, account_name, status, admin_notes, created_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, NOW())`,
+      [resolvedUserId, numAmount, bankName, accountNumber, accountName, notes || null],
+    );
+
+    const insertedId = insertRes?.insertId;
+
+    // Kirim notifikasi real-time ke Admin Web dan konfirmasi ke Kurir
+    try {
+      const notifRepo = new NotificationRepository();
+      const formattedAmt = new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        maximumFractionDigits: 0,
+      }).format(numAmount);
+
+      // 1. Notifikasi ke Admin Web (target_role: 'admin')
+      await notifRepo.create({
+        target_role: 'admin',
+        title: 'Pengajuan Penarikan Dana (WD)',
+        message: `Kurir ${userRes[0].name_users || 'Kurir'} mengajukan penarikan dana sebesar ${formattedAmt} ke rekening ${bankName} (${accountNumber} a.n. ${accountName}).`,
+        type: 'withdrawal_requested',
+        data: {
+          withdrawal_id: insertedId,
+          courier_id: resolvedUserId,
+          courier_name: userRes[0].name_users,
+          amount: numAmount,
+          bank_name: bankName,
+          account_number: accountNumber,
+          account_name: accountName,
+        },
+        created_pic: resolvedUserId,
+      });
+
+      // 2. Notifikasi konfirmasi ke Kurir Mobile
+      await notifRepo.create({
+        users_id: resolvedUserId,
+        title: 'Pengajuan Penarikan Dana Terkirim',
+        message: `Pengajuan penarikan dana sebesar ${formattedAmt} ke rekening ${bankName} (${accountNumber}) sedang diproses oleh admin.`,
+        type: 'withdrawal_submitted',
+        data: {
+          withdrawal_id: insertedId,
+          amount: numAmount,
+          bank_name: bankName,
+          account_number: accountNumber,
+        },
+        created_pic: resolvedUserId,
+      });
+    } catch (notifErr) {
+      console.error('[Notification] Gagal mengirim notifikasi pengajuan penarikan:', notifErr);
+    }
+
+    return {
+      id: CryptoUtil.encryptId(insertedId) ?? String(insertedId),
+      amount: numAmount,
+      bank_name: bankName,
+      account_number: accountNumber,
+      account_name: accountName,
+      status: 'pending',
+      balance_remaining: newBal,
+    };
+  }
+
+  async getCourierWithdrawals(userId: string | number): Promise<any[]> {
+    let resolvedUserId: number | null = null;
+    if (typeof userId === 'string') {
+      resolvedUserId = CryptoUtil.decryptId(userId);
+      if (!resolvedUserId && /^\d+$/.test(userId)) {
+        resolvedUserId = parseInt(userId, 10);
+      }
+    } else {
+      resolvedUserId = userId;
+    }
+
+    if (!resolvedUserId) return [];
+
+    const rows = await query<any>(
+      `SELECT 
+        id_withdrawal_requests, 
+        users_id, 
+        amount, 
+        bank_name, 
+        account_number, 
+        account_name, 
+        status, 
+        admin_notes, 
+        processed_at, 
+        created_at 
+       FROM withdrawal_requests 
+       WHERE users_id = ? 
+       ORDER BY created_at DESC, id_withdrawal_requests DESC`,
+      [resolvedUserId],
+    );
+
+    return rows.map((r) => ({
+      ...r,
+      id: CryptoUtil.encryptId(r.id_withdrawal_requests) ?? String(r.id_withdrawal_requests),
+      user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+      amount: Number(r.amount) || 0,
     }));
   }
 }

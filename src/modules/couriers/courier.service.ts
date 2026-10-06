@@ -79,5 +79,27 @@ export class CourierService {
   }) {
     return await this.courierRepository.getCourierTransactions(options);
   }
+
+  async requestWithdrawal(
+    userId: string | number,
+    amount: number,
+    bankName: string,
+    accountNumber: string,
+    accountName: string,
+    notes?: string,
+  ) {
+    return await this.courierRepository.requestWithdrawal(
+      userId,
+      amount,
+      bankName,
+      accountNumber,
+      accountName,
+      notes,
+    );
+  }
+
+  async getCourierWithdrawals(userId: string | number) {
+    return await this.courierRepository.getCourierWithdrawals(userId);
+  }
 }
 

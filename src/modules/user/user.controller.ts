@@ -198,6 +198,29 @@ export class UserController {
       sendError(res, error.message || 'Gagal mengambil riwayat transaksi', 400);
     }
   };
+
+  topupWallet = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const { amount, payment_method, notes } = req.body;
+      const file = req.file;
+      const result = await this.userService.topupWallet(
+        String(userId),
+        Number(amount),
+        payment_method,
+        notes,
+        file
+      );
+      sendSuccess(res, result, 'Pengajuan pengisian saldo LaundryPay berhasil dikirim dan sedang menunggu verifikasi admin');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mengajukan top-up saldo', 400);
+    }
+  };
 }
+
 
 

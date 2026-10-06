@@ -2,6 +2,8 @@ import bcrypt from "bcryptjs";
 import { query } from "../../config/database";
 import { CryptoUtil } from "../../utils/crypto.util";
 import { UserCodeUtil } from "../../utils/user-code.util";
+import { NotificationRepository } from "../notifications/notification.repository";
+import { NotificationService } from "../notifications/notification.service";
 
 export interface RoleEntity {
   id_roles: number | string;
@@ -1000,6 +1002,394 @@ export class SystemRepository {
       "UPDATE menus SET deleted_at = NOW(), delete_pic = ? WHERE id_menus = ?",
       [deletePic, numericId],
     );
+    return true;
+  }
+
+  // Wallet & Withdrawals (Admin)
+  async topupUserBalance(
+    userId: string | number,
+    amount: number,
+    notes?: string,
+    referenceNo?: string,
+    creatorPic: number | null = null,
+  ): Promise<{ success: boolean; balance_before: number; balance_after: number }> {
+    const numericId = CryptoUtil.decryptId(userId) ?? userId;
+    const userRes = await query<any>(
+      "SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1",
+      [numericId],
+    );
+    if (!userRes || userRes.length === 0) {
+      throw new Error("Pengguna tidak ditemukan");
+    }
+
+    const currentBal = Number(userRes[0].laundry_pay_balance) || 0;
+    const topupAmt = Math.max(0, Number(amount) || 0);
+    const newBal = currentBal + topupAmt;
+
+    await query("UPDATE users SET laundry_pay_balance = ? WHERE id_users = ?", [newBal, numericId]);
+
+    const ref = referenceNo || `TOPUP-${Date.now()}`;
+    await query(
+      `INSERT INTO wallet_transactions 
+       (users_id, type, category, amount, balance_before, balance_after, title, description, reference_no, created_at)
+       VALUES (?, 'credit', 'topup', ?, ?, ?, 'Top-Up Saldo LaundryPay', ?, ?, NOW())`,
+      [numericId, topupAmt, currentBal, newBal, notes || "Top-Up Saldo oleh Admin/Kasir", ref],
+    );
+
+    // Kirim notifikasi real-time ke akun pengguna/pelanggan
+    try {
+      const notifRepo = new NotificationRepository();
+      const formattedAmt = new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+      }).format(topupAmt);
+      const formattedNewBal = new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+      }).format(newBal);
+
+      await notifRepo.create({
+        users_id: numericId,
+        title: "Top-Up Saldo Berhasil",
+        message: `Saldo LaundryPay Anda telah ditambahkan sebesar ${formattedAmt}. Total saldo aktif Anda sekarang ${formattedNewBal}.`,
+        type: "topup_success",
+        data: {
+          amount: topupAmt,
+          balance_before: currentBal,
+          balance_after: newBal,
+          reference_no: ref,
+          notes: notes || null,
+        },
+        created_pic: creatorPic,
+      });
+    } catch (notifErr) {
+      console.error("[Notification] Gagal mengirim notifikasi topup:", notifErr);
+    }
+
+    return { success: true, balance_before: currentBal, balance_after: newBal };
+  }
+
+  async getWithdrawalRequests(status?: string, search?: string): Promise<any[]> {
+    let sql = `
+      SELECT 
+        wr.id_withdrawal_requests,
+        wr.users_id,
+        u.name_users AS user_name,
+        u.phone AS user_phone,
+        u.email AS user_email,
+        u.role_code,
+        r.name_roles AS role_name,
+        wr.amount,
+        wr.bank_name,
+        wr.account_number,
+        wr.account_name,
+        wr.status,
+        wr.admin_notes,
+        wr.proof_image,
+        wr.processed_by,
+        proc.name_users AS processor_name,
+        wr.processed_at,
+        wr.created_at,
+        wr.updated_at
+      FROM withdrawal_requests wr
+      JOIN users u ON wr.users_id = u.id_users
+      LEFT JOIN roles r ON u.role_code = r.code
+      LEFT JOIN users proc ON wr.processed_by = proc.id_users
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (status && status !== "all") {
+      sql += " AND wr.status = ?";
+      params.push(status);
+    }
+
+    if (search && search.trim()) {
+      const q = `%${search.trim()}%`;
+      sql += " AND (u.name_users LIKE ? OR u.phone LIKE ? OR wr.account_number LIKE ? OR wr.account_name LIKE ? OR wr.bank_name LIKE ?)";
+      params.push(q, q, q, q, q);
+    }
+
+    sql += " ORDER BY wr.created_at DESC, wr.id_withdrawal_requests DESC";
+
+    const rows = await query<any>(sql, params);
+    return rows.map((r) => ({
+      ...r,
+      id: CryptoUtil.encryptId(r.id_withdrawal_requests) ?? String(r.id_withdrawal_requests),
+      user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+      amount: Number(r.amount) || 0,
+    }));
+  }
+
+  async updateWithdrawalStatus(
+    withdrawalId: string | number,
+    status: "completed" | "rejected",
+    adminNotes?: string,
+    processedBy: number | null = null,
+  ): Promise<boolean> {
+    const numericId = CryptoUtil.decryptId(withdrawalId) ?? withdrawalId;
+    const wrRes = await query<any>(
+      "SELECT id_withdrawal_requests, users_id, amount, bank_name, account_number, account_name, status FROM withdrawal_requests WHERE id_withdrawal_requests = ? LIMIT 1",
+      [numericId],
+    );
+    if (!wrRes || wrRes.length === 0) {
+      throw new Error("Permintaan penarikan dana tidak ditemukan");
+    }
+
+    const currentWr = wrRes[0];
+    if (currentWr.status !== "pending") {
+      throw new Error(`Permintaan penarikan sudah berstatus '${currentWr.status}'`);
+    }
+
+    const userId = currentWr.users_id;
+    const amount = Number(currentWr.amount) || 0;
+
+    if (status === "rejected") {
+      // Kembalikan saldo ke pengguna
+      const userRes = await query<any>("SELECT laundry_pay_balance FROM users WHERE id_users = ? LIMIT 1", [userId]);
+      const currentBal = userRes && userRes.length > 0 ? Number(userRes[0].laundry_pay_balance) || 0 : 0;
+      const newBal = currentBal + amount;
+
+      await query("UPDATE users SET laundry_pay_balance = ? WHERE id_users = ?", [newBal, userId]);
+
+      await query(
+        `INSERT INTO wallet_transactions 
+         (users_id, type, category, amount, balance_before, balance_after, title, description, reference_no, created_at)
+         VALUES (?, 'credit', 'refund', ?, ?, ?, 'Pengembalian Penarikan Dana (Ditolak)', ?, ?, NOW())`,
+        [userId, amount, currentBal, newBal, adminNotes || "Penarikan dana ditolak oleh Admin, saldo dikembalikan ke akun", `WD-REFUND-${numericId}`],
+      );
+    }
+
+    await query(
+      `UPDATE withdrawal_requests 
+       SET status = ?, admin_notes = ?, processed_by = ?, processed_at = NOW(), updated_at = NOW() 
+       WHERE id_withdrawal_requests = ?`,
+      [status, adminNotes || null, processedBy, numericId],
+    );
+
+    // Kirim notifikasi real-time ke akun kurir
+    try {
+      const notifRepo = new NotificationRepository();
+      const formattedAmt = new Intl.NumberFormat("id-ID", {
+        style: "currency",
+        currency: "IDR",
+        maximumFractionDigits: 0,
+      }).format(amount);
+
+      if (status === "completed") {
+        await notifRepo.create({
+          users_id: userId,
+          title: "Penarikan Dana Berhasil",
+          message: `Penarikan dana sebesar ${formattedAmt} ke rekening ${currentWr.bank_name} (${currentWr.account_number}) telah disetujui & ditransfer.`,
+          type: "withdrawal_completed",
+          data: {
+            withdrawal_id: numericId,
+            amount,
+            bank_name: currentWr.bank_name,
+            account_number: currentWr.account_number,
+            status: "completed",
+            admin_notes: adminNotes || null,
+          },
+          created_pic: processedBy,
+        });
+      } else {
+        await notifRepo.create({
+          users_id: userId,
+          title: "Penarikan Dana Ditolak",
+          message: `Penarikan dana sebesar ${formattedAmt} ke rekening ${currentWr.bank_name} (${currentWr.account_number}) ditolak${adminNotes ? `: "${adminNotes}"` : ""}. Saldo telah dikembalikan ke LaundryPay Anda.`,
+          type: "withdrawal_rejected",
+          data: {
+            withdrawal_id: numericId,
+            amount,
+            bank_name: currentWr.bank_name,
+            account_number: currentWr.account_number,
+            status: "rejected",
+            admin_notes: adminNotes || null,
+          },
+          created_pic: processedBy,
+        });
+      }
+    } catch (notifErr) {
+      console.error("[Notification] Gagal mengirim notifikasi status penarikan:", notifErr);
+    }
+
+    return true;
+  }
+
+  async createTopupRequest(
+    userId: string | number,
+    amount: number,
+    paymentMethod: string,
+    notes?: string,
+    proofImage?: string,
+  ): Promise<{ success: boolean; topup_id: string | number; status: string; proof_image?: string }> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const numAmount = Math.max(0, Number(amount) || 0);
+    if (!numAmount || numAmount < 10000) {
+      throw new Error("Minimal nominal top-up adalah Rp 10.000");
+    }
+
+    const userRows = await query<any>(
+      "SELECT name_users FROM users WHERE id_users = ? LIMIT 1",
+      [numericUserId]
+    );
+    const userName = userRows && userRows.length > 0 ? userRows[0].name_users : "Pelanggan";
+
+    const insertRes: any = await query(
+      `INSERT INTO topup_requests (users_id, amount, payment_method, notes, proof_image, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', NOW())`,
+      [numericUserId, numAmount, paymentMethod || "Transfer Bank", notes || null, proofImage || null]
+    );
+
+    const rawTopupId = insertRes.insertId;
+    const encryptedTopupId = CryptoUtil.encryptId(rawTopupId) ?? rawTopupId;
+
+    // Kirim notifikasi real-time
+    try {
+      const notifService = new NotificationService();
+      // 1. Notif ke Admin Web
+      await notifService.notifyTopupRequested({
+        topupId: rawTopupId,
+        userId: numericUserId,
+        userName,
+        amount: numAmount,
+        paymentMethod: paymentMethod || "Transfer Bank",
+        notes,
+      });
+
+      // 2. Notif ke Mobile User
+      await notifService.notifyTopupSubmitted({
+        userId: numericUserId,
+        topupId: rawTopupId,
+        amount: numAmount,
+        paymentMethod: paymentMethod || "Transfer Bank",
+      });
+    } catch (notifErr) {
+      console.error("[Notification] Gagal mengirim notifikasi topup request:", notifErr);
+    }
+
+    return {
+      success: true,
+      topup_id: encryptedTopupId,
+      status: "pending",
+      proof_image: proofImage,
+    };
+  }
+
+
+  async getTopupRequests(status?: string, search?: string): Promise<any[]> {
+    let sql = `
+      SELECT 
+        tr.id_topup_requests,
+        tr.users_id,
+        u.name_users AS user_name,
+        u.phone AS user_phone,
+        u.email AS user_email,
+        u.role_code,
+        u.laundry_pay_balance,
+        r.name_roles AS role_name,
+        tr.amount,
+        tr.payment_method,
+        tr.notes,
+        tr.status,
+        tr.admin_notes,
+        tr.proof_image,
+        tr.processed_by,
+        proc.name_users AS processor_name,
+        tr.processed_at,
+        tr.created_at,
+        tr.updated_at
+      FROM topup_requests tr
+      JOIN users u ON tr.users_id = u.id_users
+      LEFT JOIN roles r ON u.role_code = r.code
+      LEFT JOIN users proc ON tr.processed_by = proc.id_users
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (status && status !== "all") {
+      sql += " AND tr.status = ?";
+      params.push(status);
+    }
+
+    if (search && search.trim()) {
+      const q = `%${search.trim()}%`;
+      sql += " AND (u.name_users LIKE ? OR u.phone LIKE ? OR u.email LIKE ? OR tr.payment_method LIKE ? OR tr.notes LIKE ?)";
+      params.push(q, q, q, q, q);
+    }
+
+    sql += " ORDER BY tr.created_at DESC, tr.id_topup_requests DESC";
+
+    const rows = await query<any>(sql, params);
+    return rows.map((r) => ({
+      ...r,
+      id: CryptoUtil.encryptId(r.id_topup_requests) ?? String(r.id_topup_requests),
+      user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+      amount: Number(r.amount) || 0,
+      laundry_pay_balance: Number(r.laundry_pay_balance) || 0,
+    }));
+  }
+
+  async updateTopupStatus(
+    topupId: string | number,
+    status: "completed" | "rejected",
+    adminNotes?: string,
+    processedBy: number | null = null
+  ): Promise<boolean> {
+    const numericId = CryptoUtil.decryptId(topupId) ?? topupId;
+    const trRes = await query<any>(
+      "SELECT id_topup_requests, users_id, amount, payment_method, notes, status FROM topup_requests WHERE id_topup_requests = ? LIMIT 1",
+      [numericId]
+    );
+    if (!trRes || trRes.length === 0) {
+      throw new Error("Permintaan top-up tidak ditemukan");
+    }
+
+    const currentTr = trRes[0];
+    if (currentTr.status !== "pending") {
+      throw new Error(`Permintaan top-up sudah berstatus '${currentTr.status}'`);
+    }
+
+    const userId = currentTr.users_id;
+    const amount = Number(currentTr.amount) || 0;
+
+    if (status === "completed") {
+      // Tambahkan saldo ke pengguna & catat mutasi wallet_transactions
+      await this.topupUserBalance(
+        userId,
+        amount,
+        adminNotes || `Top-Up via ${currentTr.payment_method}`,
+        `TOPUP-REQ-${numericId}`,
+        processedBy || undefined
+      );
+    }
+
+    await query(
+      `UPDATE topup_requests 
+       SET status = ?, admin_notes = ?, processed_by = ?, processed_at = NOW(), updated_at = NOW() 
+       WHERE id_topup_requests = ?`,
+      [status, adminNotes || null, processedBy, numericId]
+    );
+
+    // Kirim notifikasi status ke mobile pengguna jika ditolak (jika disetujui, sudah dikirim oleh topupUserBalance)
+    try {
+      const notifService = new NotificationService();
+      if (status === "rejected") {
+        await notifService.notifyTopupRejected({
+          userId,
+          topupId: numericId,
+          amount,
+          paymentMethod: currentTr.payment_method,
+          adminNotes,
+          processedBy,
+        });
+      }
+    } catch (notifErr) {
+      console.error("[Notification] Gagal mengirim notifikasi status topup:", notifErr);
+    }
+
     return true;
   }
 }

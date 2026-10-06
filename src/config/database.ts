@@ -135,6 +135,69 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
       console.warn('  ▲ [Migration Info] wallet_transactions table check:', e.message);
     }
 
+    // Auto-seed/ensure Saldo LaundryPay exists in master_payment_methods if not present
+    try {
+      const [existingLPay]: any = await connection.query(
+        'SELECT id_payment_methods FROM master_payment_methods WHERE LOWER(code) = "laundrypay" OR type = "laundrypay" LIMIT 1'
+      );
+      if (!existingLPay || existingLPay.length === 0) {
+        await connection.query(`
+          INSERT INTO master_payment_methods (name_payment_methods, code, type, account_number, account_name, description, is_active, created_at, creator)
+          VALUES ('Saldo LaundryPay', 'LAUNDRYPAY', 'laundrypay', NULL, NULL, 'Pembayaran instan langsung memotong saldo dompet digital LaundryPay Anda secara otomatis.', 1, NOW(), 1)
+        `);
+        console.log('  ✔ [Migration] Master payment method "Saldo LaundryPay" seeded successfully.');
+      }
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] master_payment_methods check:', e.message);
+    }
+
+    // Auto-create withdrawal_requests table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS withdrawal_requests (
+          id_withdrawal_requests INT AUTO_INCREMENT PRIMARY KEY,
+          users_id INT NOT NULL,
+          amount INT NOT NULL,
+          bank_name VARCHAR(100) NOT NULL,
+          account_number VARCHAR(100) NOT NULL,
+          account_name VARCHAR(150) NOT NULL,
+          status ENUM('pending', 'completed', 'rejected') NOT NULL DEFAULT 'pending',
+          admin_notes TEXT NULL,
+          proof_image VARCHAR(255) NULL,
+          processed_by INT NULL,
+          processed_at DATETIME NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          FOREIGN KEY (users_id) REFERENCES users(id_users) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] withdrawal_requests table check:', e.message);
+    }
+
+    // Auto-create topup_requests table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS topup_requests (
+          id_topup_requests INT AUTO_INCREMENT PRIMARY KEY,
+          users_id INT NOT NULL,
+          amount INT NOT NULL,
+          payment_method VARCHAR(100) NOT NULL,
+          notes TEXT NULL,
+          status ENUM('pending', 'completed', 'rejected') NOT NULL DEFAULT 'pending',
+          admin_notes TEXT NULL,
+          proof_image VARCHAR(255) NULL,
+          processed_by INT NULL,
+          processed_at DATETIME NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          FOREIGN KEY (users_id) REFERENCES users(id_users) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] topup_requests table check:', e.message);
+    }
+
     // Auto-create & migrate promos & user_vouchers table
     try {
       // 1. Check promos columns (tanpa DEFAULT)
@@ -379,35 +442,7 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
 
     // Auto-sync existing tips to courier laundry_pay_balance & wallet_transactions
     try {
-      const [couriersWithTips]: any = await connection.query(`
-        SELECT 
-          u.id_users, 
-          u.name_users,
-          u.laundry_pay_balance,
-          COALESCE(SUM(o.tip_amount), 0) AS total_tips
-        FROM users u
-        JOIN orders o ON (
-          LOWER(TRIM(o.courier_name)) = LOWER(TRIM(u.name_users)) 
-          OR (u.phone IS NOT NULL AND u.phone != '' AND REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = REPLACE(REPLACE(u.phone, '-', ''), ' ', ''))
-        )
-        WHERE o.deleted_at IS NULL AND o.tip_amount > 0 AND u.deleted_at IS NULL
-        GROUP BY u.id_users, u.name_users, u.laundry_pay_balance
-      `);
-
-      if (Array.isArray(couriersWithTips)) {
-        for (const row of couriersWithTips) {
-          const tips = Number(row.total_tips) || 0;
-          const currentBal = Number(row.laundry_pay_balance) || 0;
-          if (tips > 0 && currentBal < tips) {
-            await connection.query(
-              'UPDATE users SET laundry_pay_balance = ? WHERE id_users = ?',
-              [tips, row.id_users]
-            );
-          }
-        }
-      }
-
-      // Populate historical tips into wallet_transactions if not present
+      // 1. Populate historical tips into wallet_transactions if not present
       const [ordersWithTips]: any = await connection.query(`
         SELECT 
           o.id_orders,
@@ -451,6 +486,24 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
               ord.created_at
             ]);
           }
+        }
+      }
+
+      // 2. Recalculate true active laundry_pay_balance from wallet_transactions net sum
+      const [calculatedUsers]: any = await connection.query(`
+        SELECT 
+          users_id,
+          COALESCE(SUM(CASE WHEN type = 'credit' THEN amount ELSE -amount END), 0) AS real_balance
+        FROM wallet_transactions
+        GROUP BY users_id
+      `);
+      if (Array.isArray(calculatedUsers)) {
+        for (const u of calculatedUsers) {
+          const realBal = Math.max(0, Number(u.real_balance) || 0);
+          await connection.query(
+            'UPDATE users SET laundry_pay_balance = ? WHERE id_users = ?',
+            [realBal, u.users_id]
+          );
         }
       }
     } catch (e: any) {

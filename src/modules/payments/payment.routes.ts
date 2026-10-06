@@ -14,6 +14,7 @@ router.get('/status/:orderId', authMiddleware, controller.getPaymentStatus);
 // Xendit Endpoints
 router.post('/xendit/create', authMiddleware, controller.createPayment);
 router.post('/xendit/create-qr', authMiddleware, controller.createQrisPayment);
+router.post('/xendit/create-topup-qr', authMiddleware, controller.createTopupQrisPayment);
 router.post('/xendit/simulate', authMiddleware, controller.simulatePayment);
 router.get('/xendit/status/:orderId', authMiddleware, controller.getPaymentStatus);
 

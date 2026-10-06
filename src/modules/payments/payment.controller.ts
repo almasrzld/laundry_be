@@ -48,6 +48,29 @@ export class PaymentController {
   };
 
   /**
+   * POST /api/payments/xendit/create-topup-qr
+   */
+  createTopupQrisPayment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { amount } = req.body;
+      const userId = req.user?.id;
+      if (!userId) {
+        sendError(res, 'Pengguna belum terotentikasi', 401);
+        return;
+      }
+      if (!amount || Number(amount) < 10000) {
+        sendError(res, 'Minimal nominal pengisian saldo adalah Rp 10.000', 400);
+        return;
+      }
+
+      const result = await this.paymentService.createTopupQrisPayment(userId, Number(amount));
+      sendSuccess(res, result, 'Dynamic QRIS Xendit Top-Up berhasil dibuat', 201);
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal membuat Dynamic QRIS Top-Up', 400);
+    }
+  };
+
+  /**
    * POST /api/payments/xendit/simulate
    * Khusus pengujian sandbox & development
    */

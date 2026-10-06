@@ -401,5 +401,284 @@ export class NotificationService {
       });
     }
   }
+
+  // 6. Notifikasi Top-Up Saldo LaundryPay Berhasil (Ditujukan ke Akun Pengguna / Pelanggan)
+  async notifyTopupSuccess(params: {
+    userId: number | string;
+    amount: number;
+    balanceBefore: number;
+    balanceAfter: number;
+    referenceNo?: string;
+    notes?: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const rawUserId = CryptoUtil.decryptId(params.userId) ?? Number(params.userId);
+    if (!rawUserId) return;
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    const formattedBalanceAfter = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.balanceAfter);
+
+    await this.notificationRepository.create({
+      users_id: rawUserId,
+      title: 'Top-Up Saldo Berhasil',
+      message: `Top-up saldo LaundryPay sebesar ${formattedAmount} telah berhasil ditambahkan. Saldo aktif Anda sekarang ${formattedBalanceAfter}.`,
+      type: 'topup_success',
+      target_role: null,
+      data: {
+        amount: params.amount,
+        balance_before: params.balanceBefore,
+        balance_after: params.balanceAfter,
+        reference_no: params.referenceNo,
+        notes: params.notes,
+      },
+      created_pic: params.creatorPic || null,
+    });
+  }
+
+  // 7. Notifikasi Pengajuan Penarikan Dana (WD) Masuk (Ditujukan ke Admin & Staf Operasional)
+  async notifyWithdrawalRequested(params: {
+    withdrawalId: number | string;
+    courierUserId: number | string;
+    courierName: string;
+    amount: number;
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const rawWithdrawalId = CryptoUtil.decryptId(params.withdrawalId) ?? Number(params.withdrawalId);
+    const rawCourierUserId = CryptoUtil.decryptId(params.courierUserId) ?? Number(params.courierUserId);
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    // Notifikasi untuk Admin Web
+    await this.notificationRepository.create({
+      target_role: 'admin',
+      title: 'Pengajuan Penarikan Dana (WD)',
+      message: `Kurir ${params.courierName} mengajukan penarikan dana sebesar ${formattedAmount} ke rekening ${params.bankName} (${params.accountNumber} a.n. ${params.accountName}).`,
+      type: 'withdrawal_requested',
+      data: {
+        withdrawal_id: rawWithdrawalId,
+        courier_id: rawCourierUserId,
+        courier_name: params.courierName,
+        amount: params.amount,
+        bank_name: params.bankName,
+        account_number: params.accountNumber,
+        account_name: params.accountName,
+      },
+      created_pic: params.creatorPic || rawCourierUserId,
+    });
+  }
+
+  // 8. Notifikasi Pengajuan Penarikan Dana Terkirim (Ditujukan ke Kurir)
+  async notifyWithdrawalSubmitted(params: {
+    courierUserId: number | string;
+    withdrawalId: number | string;
+    amount: number;
+    bankName: string;
+    accountNumber: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const rawCourierUserId = CryptoUtil.decryptId(params.courierUserId) ?? Number(params.courierUserId);
+    const rawWithdrawalId = CryptoUtil.decryptId(params.withdrawalId) ?? Number(params.withdrawalId);
+    if (!rawCourierUserId) return;
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    await this.notificationRepository.create({
+      users_id: rawCourierUserId,
+      title: 'Pengajuan Penarikan Dana Terkirim',
+      message: `Pengajuan penarikan dana sebesar ${formattedAmount} ke rekening ${params.bankName} (${params.accountNumber}) sedang ditinjau oleh admin.`,
+      type: 'withdrawal_submitted',
+      target_role: null,
+      data: {
+        withdrawal_id: rawWithdrawalId,
+        amount: params.amount,
+        bank_name: params.bankName,
+        account_number: params.accountNumber,
+      },
+      created_pic: params.creatorPic || rawCourierUserId,
+    });
+  }
+
+  // 9. Notifikasi Persetujuan / Penolakan Penarikan Dana (Ditujukan ke Kurir)
+  async notifyWithdrawalStatusProcessed(params: {
+    courierUserId: number | string;
+    withdrawalId: number | string;
+    amount: number;
+    bankName: string;
+    accountNumber: string;
+    status: 'completed' | 'rejected';
+    adminNotes?: string;
+    processedBy?: number | null;
+  }): Promise<void> {
+    const rawCourierUserId = CryptoUtil.decryptId(params.courierUserId) ?? Number(params.courierUserId);
+    const rawWithdrawalId = CryptoUtil.decryptId(params.withdrawalId) ?? Number(params.withdrawalId);
+    if (!rawCourierUserId) return;
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    if (params.status === 'completed') {
+      await this.notificationRepository.create({
+        users_id: rawCourierUserId,
+        title: 'Penarikan Dana Berhasil',
+        message: `Penarikan dana sebesar ${formattedAmount} ke rekening ${params.bankName} (${params.accountNumber}) telah disetujui dan berhasil ditransfer.`,
+        type: 'withdrawal_completed',
+        target_role: null,
+        data: {
+          withdrawal_id: rawWithdrawalId,
+          amount: params.amount,
+          bank_name: params.bankName,
+          account_number: params.accountNumber,
+          status: 'completed',
+          admin_notes: params.adminNotes,
+        },
+        created_pic: params.processedBy || null,
+      });
+    } else {
+      await this.notificationRepository.create({
+        users_id: rawCourierUserId,
+        title: 'Penarikan Dana Ditolak',
+        message: `Penarikan dana sebesar ${formattedAmount} ke rekening ${params.bankName} (${params.accountNumber}) ditolak${params.adminNotes ? `: "${params.adminNotes}"` : ''}. Saldo telah dikembalikan ke LaundryPay Anda.`,
+        type: 'withdrawal_rejected',
+        target_role: null,
+        data: {
+          withdrawal_id: rawWithdrawalId,
+          amount: params.amount,
+          bank_name: params.bankName,
+          account_number: params.accountNumber,
+          status: 'rejected',
+          admin_notes: params.adminNotes,
+        },
+        created_pic: params.processedBy || null,
+      });
+    }
+  }
+
+  // 10. Notifikasi Pengajuan Top-Up Saldo Masuk (Ditujukan ke Admin Web)
+  async notifyTopupRequested(params: {
+    topupId: number | string;
+    userId: number | string;
+    userName: string;
+    amount: number;
+    paymentMethod: string;
+    notes?: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const rawTopupId = CryptoUtil.decryptId(params.topupId) ?? Number(params.topupId);
+    const rawUserId = CryptoUtil.decryptId(params.userId) ?? Number(params.userId);
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    await this.notificationRepository.create({
+      target_role: 'admin',
+      title: 'Pengajuan Top-Up Saldo Baru',
+      message: `Pelanggan ${params.userName} mengajukan pengisian saldo LaundryPay sebesar ${formattedAmount} via ${params.paymentMethod}.`,
+      type: 'topup_requested',
+      data: {
+        topup_id: rawTopupId,
+        user_id: rawUserId,
+        user_name: params.userName,
+        amount: params.amount,
+        payment_method: params.paymentMethod,
+        notes: params.notes,
+      },
+      created_pic: params.creatorPic || rawUserId,
+    });
+  }
+
+  // 11. Notifikasi Pengajuan Top-Up Terkirim (Ditujukan ke Mobile Pelanggan)
+  async notifyTopupSubmitted(params: {
+    userId: number | string;
+    topupId: number | string;
+    amount: number;
+    paymentMethod: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const rawUserId = CryptoUtil.decryptId(params.userId) ?? Number(params.userId);
+    const rawTopupId = CryptoUtil.decryptId(params.topupId) ?? Number(params.topupId);
+    if (!rawUserId) return;
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    await this.notificationRepository.create({
+      users_id: rawUserId,
+      title: 'Pengajuan Top-Up Terkirim',
+      message: `Pengajuan pengisian saldo LaundryPay sebesar ${formattedAmount} via ${params.paymentMethod} sedang menunggu verifikasi admin.`,
+      type: 'topup_submitted',
+      target_role: null,
+      data: {
+        topup_id: rawTopupId,
+        amount: params.amount,
+        payment_method: params.paymentMethod,
+      },
+      created_pic: params.creatorPic || rawUserId,
+    });
+  }
+
+  // 12. Notifikasi Pengajuan Top-Up Ditolak (Ditujukan ke Mobile Pelanggan)
+  async notifyTopupRejected(params: {
+    userId: number | string;
+    topupId: number | string;
+    amount: number;
+    paymentMethod: string;
+    adminNotes?: string;
+    processedBy?: number | null;
+  }): Promise<void> {
+    const rawUserId = CryptoUtil.decryptId(params.userId) ?? Number(params.userId);
+    const rawTopupId = CryptoUtil.decryptId(params.topupId) ?? Number(params.topupId);
+    if (!rawUserId) return;
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(params.amount);
+
+    await this.notificationRepository.create({
+      users_id: rawUserId,
+      title: 'Pengajuan Top-Up Ditolak',
+      message: `Pengajuan isi saldo LaundryPay sebesar ${formattedAmount} via ${params.paymentMethod} ditolak${params.adminNotes ? `: "${params.adminNotes}"` : ''}.`,
+      type: 'topup_rejected',
+      target_role: null,
+      data: {
+        topup_id: rawTopupId,
+        amount: params.amount,
+        payment_method: params.paymentMethod,
+        admin_notes: params.adminNotes,
+        status: 'rejected',
+      },
+      created_pic: params.processedBy || null,
+    });
+  }
 }
 

@@ -1,11 +1,15 @@
 import { UserRepository, AddressEntity } from './user.repository';
 import { UserEntity } from '../auth/auth.repository';
+import { SystemRepository } from '../system/system.repository';
+import { ImageUtil } from '../../utils/image.util';
 
 export class UserService {
   private userRepository: UserRepository;
+  private systemRepository: SystemRepository;
 
-  constructor(userRepository?: UserRepository) {
+  constructor(userRepository?: UserRepository, systemRepository?: SystemRepository) {
     this.userRepository = userRepository || new UserRepository();
+    this.systemRepository = systemRepository || new SystemRepository();
   }
 
   async getProfile(userId: string): Promise<(UserEntity & { addresses: AddressEntity[] }) | null> {
@@ -192,6 +196,39 @@ export class UserService {
   async getWalletTransactions(userId: string, limit?: number) {
     return this.userRepository.getWalletTransactions(userId, limit);
   }
+
+  async topupWallet(
+    userId: string | number,
+    amount: number,
+    paymentMethod?: string,
+    notes?: string,
+    file?: Express.Multer.File
+  ) {
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount < 10000) {
+      throw new Error('Minimal nominal pengisian saldo adalah Rp 10.000');
+    }
+
+    let proofImageUrl: string | undefined = undefined;
+    if (file && file.buffer) {
+      const processed = await ImageUtil.processAndSavePaymentProof(
+        file.buffer,
+        `TOPUP-${userId}`,
+        file.originalname,
+        file.mimetype
+      );
+      proofImageUrl = processed.relativeUrl;
+    }
+
+    return await this.systemRepository.createTopupRequest(
+      userId,
+      numAmount,
+      paymentMethod || 'Transfer Bank',
+      notes,
+      proofImageUrl
+    );
+  }
 }
+
 
 

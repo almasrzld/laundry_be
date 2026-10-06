@@ -94,6 +94,8 @@ export class OrderController {
         notes,
         order_statuses_id,
         status,
+        payment_method,
+        payment_method_code,
       } = req.body;
 
       if (!service_name || !price_per_unit || !pickup_address) {
@@ -120,6 +122,8 @@ export class OrderController {
           discount: discount !== undefined ? Number(discount) : 0,
           voucher_code: voucher_code ? String(voucher_code).trim() : undefined,
           points_redeemed: points_redeemed !== undefined ? Number(points_redeemed) : 0,
+          payment_method: payment_method ? String(payment_method).trim() : undefined,
+          payment_method_code: payment_method_code ? String(payment_method_code).trim() : undefined,
           pickup_address,
           delivery_address,
           notes,

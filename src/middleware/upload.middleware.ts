@@ -32,10 +32,28 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
   }
 };
 
-export const uploadPaymentProofMiddleware = multer({
+const multerUpload = multer({
   storage,
   limits: {
     fileSize: 15 * 1024 * 1024, // Izinkan upload raw hingga 15MB sebelum di-convert & dikompresi ke WebP <= 1MB
   },
   fileFilter,
-}).single('proof');
+}).fields([
+  { name: 'proof', maxCount: 1 },
+  { name: 'proof_image', maxCount: 1 },
+  { name: 'image', maxCount: 1 },
+]);
+
+export const uploadPaymentProofMiddleware = (req: Request, res: any, next: any) => {
+  multerUpload(req, res, (err: any) => {
+    if (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    if (req.files && typeof req.files === 'object' && !Array.isArray(req.files)) {
+      const filesMap = req.files as Record<string, Express.Multer.File[]>;
+      req.file = filesMap.proof?.[0] || filesMap.proof_image?.[0] || filesMap.image?.[0];
+    }
+    next();
+  });
+};
+

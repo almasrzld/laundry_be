@@ -401,6 +401,68 @@ export class UserRepository {
     return false;
   }
 
+  async deductLaundryPayBalance(
+    userId: string | number,
+    amount: number,
+    orderId?: string | number | null,
+    invoiceNo?: string,
+    title?: string,
+    description?: string
+  ): Promise<{ success: boolean; balanceBefore: number; balanceAfter: number }> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const numericOrderId = orderId ? (CryptoUtil.decryptId(orderId) ?? Number(orderId)) : null;
+    if (!numericUserId || amount <= 0) {
+      return { success: false, balanceBefore: 0, balanceAfter: 0 };
+    }
+
+    const userRes = await query<any>(
+      'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+      [numericUserId]
+    );
+    if (!userRes || userRes.length === 0) {
+      throw new Error('Pengguna tidak ditemukan atau telah dinonaktifkan.');
+    }
+
+    const currentBal = Number(userRes[0].laundry_pay_balance) || 0;
+    if (currentBal < amount) {
+      const shortage = amount - currentBal;
+      throw new Error(
+        `Saldo LaundryPay Anda tidak mencukupi. Saldo saat ini Rp ${currentBal.toLocaleString('id-ID')}, kurang Rp ${shortage.toLocaleString('id-ID')} dari total pembayaran Rp ${amount.toLocaleString('id-ID')}. Silakan lakukan top-up saldo terlebih dahulu.`
+      );
+    }
+
+    const newBal = currentBal - amount;
+    const res: any = await query(
+      'UPDATE users SET laundry_pay_balance = ? WHERE id_users = ? AND laundry_pay_balance >= ?',
+      [newBal, numericUserId, amount]
+    );
+
+    if (res.affectedRows > 0) {
+      try {
+        await query(
+          `INSERT INTO wallet_transactions 
+            (users_id, orders_id, type, category, amount, balance_before, balance_after, title, description, reference_no, created_at)
+           VALUES (?, ?, 'debit', 'order_payment', ?, ?, ?, ?, ?, ?, NOW())`,
+          [
+            numericUserId,
+            numericOrderId,
+            amount,
+            currentBal,
+            newBal,
+            title || `Pembayaran Pesanan #${invoiceNo || ''}`,
+            description || `Pembayaran pesanan menggunakan saldo LaundryPay`,
+            invoiceNo || null,
+          ]
+        );
+      } catch (e) {
+        console.warn('[WalletTransaction Warning] Gagal mencatat debit saldo LaundryPay:', e);
+      }
+      return { success: true, balanceBefore: currentBal, balanceAfter: newBal };
+    }
+
+    throw new Error('Gagal memproses pemotongan saldo LaundryPay.');
+  }
+
   async getPointHistories(userId: string | number): Promise<PointHistoryEntity[]> {
     const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
     if (!numericUserId) return [];

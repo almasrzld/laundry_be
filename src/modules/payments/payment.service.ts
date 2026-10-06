@@ -2,6 +2,7 @@ import { XenditService, XenditQrCodeResponse } from './xendit.service';
 import { PaymentRepository, PaymentTransactionEntity } from './payment.repository';
 import { OrderRepository } from '../orders/order.repository';
 import { NotificationService } from '../notifications/notification.service';
+import { SystemRepository } from '../system/system.repository';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { ImageUtil } from '../../utils/image.util';
 
@@ -10,17 +11,20 @@ export class PaymentService {
   private paymentRepository: PaymentRepository;
   private orderRepository: OrderRepository;
   private notificationService: NotificationService;
+  private systemRepository: SystemRepository;
 
   constructor(
     xenditService?: XenditService,
     paymentRepository?: PaymentRepository,
     orderRepository?: OrderRepository,
-    notificationService?: NotificationService
+    notificationService?: NotificationService,
+    systemRepository?: SystemRepository
   ) {
     this.xenditService = xenditService || new XenditService();
     this.paymentRepository = paymentRepository || new PaymentRepository();
     this.orderRepository = orderRepository || new OrderRepository();
     this.notificationService = notificationService || new NotificationService();
+    this.systemRepository = systemRepository || new SystemRepository();
   }
 
   /**
@@ -244,9 +248,92 @@ export class PaymentService {
   }
 
   /**
+   * Membuat pembayaran Dynamic QRIS Xendit untuk Top-Up Saldo LaundryPay
+   */
+  async createTopupQrisPayment(userIdRaw: string | number, amountRaw: number): Promise<any> {
+    const userId = typeof userIdRaw === 'string'
+      ? (CryptoUtil.decryptId(userIdRaw) || parseInt(userIdRaw, 10))
+      : userIdRaw;
+
+    if (!userId || isNaN(userId)) {
+      throw new Error('ID Pengguna tidak valid');
+    }
+
+    const amount = Number(amountRaw);
+    if (!amount || amount < 10000) {
+      throw new Error('Minimal nominal top-up adalah Rp 10.000');
+    }
+
+    // Buat pengajuan topup di sistem
+    const topupReq = await this.systemRepository.createTopupRequest(
+      userId,
+      amount,
+      'QRIS',
+      'Pengisian saldo instan via QRIS Xendit'
+    );
+
+    const rawTopupId = CryptoUtil.decryptId(topupReq.topup_id) ?? Number(topupReq.topup_id);
+    const referenceId = `TOPUP-XND-${rawTopupId}-${Date.now().toString().slice(-4)}`;
+
+    // Buat QR Code baru via Xendit
+    const xenditResult = await this.xenditService.createQrCode({
+      referenceId,
+      amount,
+      description: `Top-Up Saldo LaundryPay #${rawTopupId}`,
+    });
+
+    // Simpan ke payment_transactions
+    await this.paymentRepository.saveTransaction({
+      orders_id: 0,
+      reference_id: referenceId,
+      qr_id: xenditResult.id,
+      qr_string: xenditResult.qr_string,
+      amount,
+      payment_method: 'QRIS',
+      status: 'PENDING',
+      expires_at: xenditResult.expires_at,
+      payload: JSON.stringify({ ...xenditResult, topup_id: rawTopupId, user_id: userId }),
+      creator: Number(userId),
+    });
+
+    return {
+      order_id: `topup_${topupReq.topup_id}`,
+      topup_id: topupReq.topup_id,
+      invoice_no: `TOPUP-${rawTopupId}`,
+      reference_id: referenceId,
+      payment_type: 'QRIS',
+      qr_id: xenditResult.id,
+      qr_string: xenditResult.qr_string,
+      amount,
+      expires_at: xenditResult.expires_at,
+      status: 'PENDING',
+      service_name: 'Isi Saldo LaundryPay',
+    };
+  }
+
+  /**
    * Simulasi Pembayaran Berhasil (Khusus Sandbox & Testing untuk QRIS / VA / E-Wallet)
    */
   async simulatePayment(orderIdRaw: string | number): Promise<any> {
+    // 1. Cek apakah ini simulasi pembayaran Top-Up Saldo
+    if (typeof orderIdRaw === 'string' && orderIdRaw.startsWith('topup_')) {
+      const topupIdEnc = orderIdRaw.replace('topup_', '');
+      const rawTopupId = CryptoUtil.decryptId(topupIdEnc) ?? parseInt(topupIdEnc, 10);
+      if (!rawTopupId || isNaN(rawTopupId)) {
+        throw new Error('ID Top-up tidak valid');
+      }
+
+      // Update status topup & tambah saldo pengguna secara otomatis
+      await this.systemRepository.updateTopupStatus(rawTopupId, 'completed', 'Lunas Otomatis via QRIS Xendit');
+
+      return {
+        success: true,
+        message: 'Top-Up Saldo LaundryPay via QRIS berhasil diverifikasi! Saldo otomatis masuk ke akun Anda.',
+        status: 'PAID',
+      };
+    }
+
+    // 2. Transaksi Pesanan Biasa
     const orderId = typeof orderIdRaw === 'string'
       ? (CryptoUtil.decryptId(orderIdRaw) || parseInt(orderIdRaw, 10))
       : orderIdRaw;
@@ -399,9 +486,29 @@ export class PaymentService {
   }
 
   /**
-   * Cek Status Pembayaran Pesanan
+   * Cek Status Pembayaran Pesanan atau Top-Up Saldo
    */
   async getPaymentStatus(orderIdRaw: string | number): Promise<any> {
+    // 1. Cek status topup
+    if (typeof orderIdRaw === 'string' && orderIdRaw.startsWith('topup_')) {
+      const topupIdEnc = orderIdRaw.replace('topup_', '');
+      const rawTopupId = CryptoUtil.decryptId(topupIdEnc) ?? parseInt(topupIdEnc, 10);
+      if (!rawTopupId || isNaN(rawTopupId)) {
+        throw new Error('ID Top-up tidak valid');
+      }
+
+      const rows = await this.systemRepository.getTopupRequests(undefined, undefined);
+      const topup = rows.find((r) => String(r.id_topup_requests) === String(rawTopupId) || r.id === topupIdEnc);
+      return {
+        order_id: orderIdRaw,
+        status: topup?.status === 'completed' ? 'PAID' : (topup?.status === 'rejected' ? 'REJECTED' : 'PENDING'),
+        amount: topup?.amount || 0,
+        payment_method: 'QRIS',
+        service_name: 'Isi Saldo LaundryPay',
+      };
+    }
+
+    // 2. Cek status pesanan
     const orderId = typeof orderIdRaw === 'string'
       ? (CryptoUtil.decryptId(orderIdRaw) || parseInt(orderIdRaw, 10))
       : orderIdRaw;
@@ -411,6 +518,23 @@ export class PaymentService {
     }
 
     const tx = await this.paymentRepository.getTransactionByOrderId(orderId);
+    if (!tx) {
+      const order = await this.orderRepository.findById(orderId);
+      const isLPay = order?.notes?.toLowerCase().includes('laundrypay') || order?.notes?.toLowerCase().includes('saldo');
+      const isFree = order?.notes?.toLowerCase().includes('lunas (voucher & poin)');
+      if (isLPay || isFree) {
+        const orderAmount = Math.max(0, ((order?.quantity || 1) * (order?.price_per_unit || 0)) + (order?.delivery_fee || 0) - (order?.discount || 0));
+        return {
+          order_id: CryptoUtil.encryptId(orderId),
+          status: 'PAID',
+          paid_at: order?.order_date || new Date(),
+          amount: orderAmount,
+          payment_method: isLPay ? 'Saldo LaundryPay' : 'Voucher & Poin',
+          proof_image: null,
+        };
+      }
+    }
+
     return {
       order_id: CryptoUtil.encryptId(orderId),
       status: tx?.status || 'UNPAID',
@@ -440,9 +564,21 @@ export class PaymentService {
       return { received: true, message: 'Tidak ada reference_id / external_id yang relevan' };
     }
 
+    // A. Webhook Callback untuk Top-Up Saldo
+    if (referenceId.startsWith('TOPUP-XND-')) {
+      const parts = referenceId.split('-');
+      const rawTopupId = Number(parts[2]);
+      if (rawTopupId && (status === 'SUCCEEDED' || status === 'COMPLETED' || status === 'PAID' || event === 'qr.payment.succeeded')) {
+        await this.paymentRepository.updateTransactionStatus(referenceId, 'PAID', new Date());
+        await this.systemRepository.updateTopupStatus(rawTopupId, 'completed', 'Lunas Otomatis via QRIS Xendit Webhook');
+        return { received: true, success: true, topup_id: rawTopupId };
+      }
+    }
+
+    // B. Webhook Callback untuk Pesanan
     const tx = await this.paymentRepository.getTransactionByReferenceId(referenceId);
     if (tx) {
-      if (status === 'SUCCEEDED' || status === 'COMPLETED' || status === 'PAID' || event === 'fva_paid' || event === 'ewallet.charge.succeeded') {
+      if (status === 'SUCCEEDED' || status === 'COMPLETED' || status === 'PAID' || event === 'fva_paid' || event === 'ewallet.charge.succeeded' || event === 'qr.payment.succeeded') {
         const paymentLabel = tx.payment_method?.startsWith('VA_')
           ? tx.payment_method.replace('VA_', 'Virtual Account ')
           : (tx.payment_method?.startsWith('EWALLET_') ? tx.payment_method.replace('EWALLET_ID_', 'E-Wallet ') : (source && source !== 'QRIS' ? `QRIS (${source})` : 'QRIS'));

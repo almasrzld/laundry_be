@@ -288,4 +288,99 @@ export class SystemController {
       sendError(res, err.message || "Gagal menghapus menu", 500);
     }
   };
+
+  // Wallet & Withdrawal Management (Admin)
+  topupUserBalance = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { amount, notes, reference_no } = req.body;
+      const numAmount = Number(amount);
+      if (!numAmount || numAmount <= 0) {
+        sendError(res, "Nominal top-up harus lebih besar dari 0", 400);
+        return;
+      }
+      const picId = getPicId(req);
+      const result = await this.service.topupUserBalance(
+        req.params.id,
+        numAmount,
+        notes,
+        reference_no,
+        picId,
+      );
+      sendSuccess(res, result, "Top-up saldo pengguna berhasil diproses", 200);
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal memproses top-up saldo", 500);
+    }
+  };
+
+  getWithdrawalRequests = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const status = req.query.status as string;
+      const search = req.query.search as string;
+      const data = await this.service.getWithdrawalRequests(status, search);
+      sendSuccess(res, data, "Daftar permintaan penarikan dana berhasil diambil");
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal mengambil daftar penarikan dana", 500);
+    }
+  };
+
+  updateWithdrawalStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { status, admin_notes } = req.body;
+      if (status !== "completed" && status !== "rejected") {
+        sendError(res, "Status harus 'completed' atau 'rejected'", 400);
+        return;
+      }
+      if (status === "rejected" && (!admin_notes || admin_notes.trim().length === 0)) {
+        sendError(res, "Keterangan / alasan penolakan penarikan dana wajib diisi agar kurir mengetahui penyebabnya", 400);
+        return;
+      }
+      const picId = getPicId(req);
+      await this.service.updateWithdrawalStatus(req.params.id, status, admin_notes?.trim(), picId);
+      sendSuccess(
+        res,
+        { id: req.params.id, status, admin_notes },
+        status === "completed"
+          ? "Penarikan dana berhasil disetujui & ditandai selesai"
+          : "Penarikan dana berhasil ditolak dan saldo dikembalikan ke kurir",
+      );
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal memperbarui status penarikan dana", 500);
+    }
+  };
+
+  getTopupRequests = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const status = req.query.status as string;
+      const search = req.query.search as string;
+      const data = await this.service.getTopupRequests(status, search);
+      sendSuccess(res, data, "Daftar permintaan top-up saldo berhasil diambil");
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal mengambil daftar permintaan top-up", 500);
+    }
+  };
+
+  updateTopupStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { status, admin_notes } = req.body;
+      if (status !== "completed" && status !== "rejected") {
+        sendError(res, "Status harus 'completed' atau 'rejected'", 400);
+        return;
+      }
+      if (status === "rejected" && (!admin_notes || admin_notes.trim().length === 0)) {
+        sendError(res, "Keterangan / alasan penolakan top-up wajib diisi agar pelanggan mengetahui penyebabnya", 400);
+        return;
+      }
+      const picId = getPicId(req);
+      await this.service.updateTopupStatus(req.params.id, status, admin_notes?.trim(), picId);
+      sendSuccess(
+        res,
+        { id: req.params.id, status, admin_notes },
+        status === "completed"
+          ? "Pengajuan top-up berhasil disetujui & saldo telah ditambahkan ke akun pelanggan"
+          : "Pengajuan top-up berhasil ditolak",
+      );
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal memperbarui status pengajuan top-up", 500);
+    }
+  };
 }

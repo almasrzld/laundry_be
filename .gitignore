@@ -37,3 +37,8 @@ Thumbs.db
 uploads/
 tmp/
 temp/
+
+# AI Agent Instructions & Rules
+AGENTS.md
+.agents/
+*.agent.md

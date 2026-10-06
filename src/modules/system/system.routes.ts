@@ -11,6 +11,16 @@ router.post('/users', controller.createUser);
 router.put('/users/:id', controller.updateUser);
 router.delete('/users/:id', controller.softDeleteUser);
 router.post('/users/:id/restore', controller.restoreUser);
+router.post('/users/:id/topup', controller.topupUserBalance);
+
+// Withdrawals Management (Admin)
+router.get('/withdrawals', controller.getWithdrawalRequests);
+router.put('/withdrawals/:id/status', controller.updateWithdrawalStatus);
+
+// Topup Requests Management (Admin)
+router.get('/topups', controller.getTopupRequests);
+router.put('/topups/:id/status', controller.updateTopupStatus);
+router.patch('/topups/:id/status', controller.updateTopupStatus);
 
 // Roles
 router.get('/roles', controller.getRoles);
