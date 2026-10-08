@@ -4,6 +4,7 @@ import { CryptoUtil } from "../../utils/crypto.util";
 import { UserCodeUtil } from "../../utils/user-code.util";
 import { NotificationRepository } from "../notifications/notification.repository";
 import { NotificationService } from "../notifications/notification.service";
+import { normalizeBankName } from "../couriers/courier.repository";
 
 export interface RoleEntity {
   id_roles: number | string;
@@ -1119,6 +1120,7 @@ export class SystemRepository {
       ...r,
       id: CryptoUtil.encryptId(r.id_withdrawal_requests) ?? String(r.id_withdrawal_requests),
       user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+      bank_name: normalizeBankName(r.bank_name),
       amount: Number(r.amount) || 0,
     }));
   }

@@ -29,6 +29,11 @@ export interface CourierSummaryEntity {
   laundry_pay_balance?: number;
 }
 
+export function normalizeBankName(name: string): string {
+  if (!name) return '';
+  return name.trim();
+}
+
 export class CourierRepository {
   async getCouriers(): Promise<CourierEntity[]> {
     // 1. Ambil semua akun staf kurir aktif dari database
@@ -97,6 +102,7 @@ export class CourierRepository {
     courierName?: string | null;
     courierPhone?: string | null;
     userId?: number | null;
+    isPersonalView?: boolean;
   }): Promise<CourierSummaryEntity> {
     const couriersCountRes = await query<any>(`
       SELECT COUNT(u.id_users) AS total_couriers
@@ -105,6 +111,30 @@ export class CourierRepository {
       WHERE (u.role_code LIKE '%kurir%' OR u.role_code LIKE '%courier%' OR LOWER(r.name_roles) LIKE '%kurir%')
         AND u.deleted_at IS NULL
     `);
+
+    // Ambil saldo dompet pengguna
+    let courierBalance = 0;
+    if (options?.userId) {
+      const userRes = await query<any>(
+        'SELECT laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+        [options.userId]
+      );
+      if (userRes && userRes.length > 0) {
+        courierBalance = Number(userRes[0].laundry_pay_balance) || 0;
+      }
+    }
+
+    // Jika personal view tetapi tidak ada identitas kurir yang cocok (misal customer atau user tanpa tugas)
+    if (options?.isPersonalView && !options?.courierName && !options?.courierPhone) {
+      return {
+        total_couriers: 1,
+        active_deliveries: 0,
+        completed_deliveries: 0,
+        total_tips: 0,
+        average_rating: 0,
+        laundry_pay_balance: courierBalance,
+      };
+    }
 
     let ordersSql = `
       SELECT 
@@ -123,50 +153,33 @@ export class CourierRepository {
     if (options?.courierName || options?.courierPhone) {
       const cleanPhone = (options.courierPhone || '').replace(/[^0-9]/g, '');
       const cName = (options.courierName || '').trim();
+      const cleanName = cName.replace(/\s*\([^)]*\)/g, '').trim();
 
-      if (cName && cleanPhone.length > 5) {
-        ordersSql += ` AND (LOWER(o.courier_name) = LOWER(?) OR REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = ?)`;
-        params.push(cName, cleanPhone);
-      } else if (cName) {
-        ordersSql += ` AND LOWER(o.courier_name) = LOWER(?)`;
+      const conditions: string[] = [];
+      if (cName) {
+        conditions.push('LOWER(o.courier_name) = LOWER(?)');
         params.push(cName);
-      } else if (cleanPhone.length > 5) {
-        ordersSql += ` AND REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = ?`;
+        if (cleanName && cleanName.toLowerCase() !== cName.toLowerCase()) {
+          conditions.push('LOWER(o.courier_name) = LOWER(?)');
+          params.push(cleanName);
+        }
+      }
+      if (cleanPhone.length > 5) {
+        conditions.push("REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = ?");
         params.push(cleanPhone);
+      }
+
+      if (conditions.length > 0) {
+        ordersSql += ` AND (${conditions.join(' OR ')})`;
       }
     }
 
     const ordersStatsRes = await query<any>(ordersSql, params);
-
-    // Ambil saldo dompet kurir jika ada userId
-    let courierBalance = 0;
-    if (options?.userId) {
-      const userRes = await query<any>(
-        'SELECT laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
-        [options.userId]
-      );
-      if (userRes && userRes.length > 0) {
-        courierBalance = Number(userRes[0].laundry_pay_balance) || 0;
-      }
-    } else if (options?.courierPhone || options?.courierName) {
-      const cleanPhone = (options.courierPhone || '').replace(/[^0-9]/g, '');
-      const cName = (options.courierName || '').trim();
-      const userRes = await query<any>(
-        `SELECT laundry_pay_balance FROM users 
-         WHERE ((phone IS NOT NULL AND phone != '' AND REPLACE(REPLACE(phone, '-', ''), ' ', '') = ?) OR LOWER(name_users) = LOWER(?))
-           AND deleted_at IS NULL LIMIT 1`,
-        [cleanPhone, cName]
-      );
-      if (userRes && userRes.length > 0) {
-        courierBalance = Number(userRes[0].laundry_pay_balance) || 0;
-      }
-    }
-
     const cCount = Number(couriersCountRes[0]?.total_couriers) || 0;
     const stats = ordersStatsRes[0] || {};
 
     return {
-      total_couriers: options?.courierName || options?.courierPhone ? 1 : cCount,
+      total_couriers: options?.isPersonalView || options?.courierName || options?.courierPhone ? 1 : cCount,
       active_deliveries: Number(stats.active_deliveries) || 0,
       completed_deliveries: Number(stats.completed_deliveries) || 0,
       total_tips: Number(stats.total_tips) || 0,
@@ -179,7 +192,13 @@ export class CourierRepository {
     courierName?: string | null;
     courierPhone?: string | null;
     statusFilter?: 'active' | 'history' | 'all';
+    isPersonalView?: boolean;
   }): Promise<OrderEntity[]> {
+    // Jika personal view tetapi tidak ada identitas kurir yang cocok, jangan bocorkan tugas kurir lain
+    if (options.isPersonalView && !options.courierName && !options.courierPhone) {
+      return [];
+    }
+
     let sql = `
       SELECT 
         o.id_orders,
@@ -224,14 +243,28 @@ export class CourierRepository {
     `;
     const params: any[] = [];
 
-    if (options.courierName) {
-      sql += ' AND (LOWER(o.courier_name) = LOWER(?)';
-      params.push(options.courierName.trim());
-      if (options.courierPhone) {
-        sql += ' OR o.courier_phone = ?';
-        params.push(options.courierPhone.trim());
+    if (options.courierName || options.courierPhone) {
+      const cleanPhone = (options.courierPhone || '').replace(/[^0-9]/g, '');
+      const cName = (options.courierName || '').trim();
+      const cleanName = cName.replace(/\s*\([^)]*\)/g, '').trim();
+
+      const conditions: string[] = [];
+      if (cName) {
+        conditions.push('LOWER(o.courier_name) = LOWER(?)');
+        params.push(cName);
+        if (cleanName && cleanName.toLowerCase() !== cName.toLowerCase()) {
+          conditions.push('LOWER(o.courier_name) = LOWER(?)');
+          params.push(cleanName);
+        }
       }
-      sql += ')';
+      if (cleanPhone.length > 5) {
+        conditions.push("REPLACE(REPLACE(o.courier_phone, '-', ''), ' ', '') = ?");
+        params.push(cleanPhone);
+      }
+
+      if (conditions.length > 0) {
+        sql += ` AND (${conditions.join(' OR ')})`;
+      }
     }
 
     if (options.statusFilter === 'active') {
@@ -252,7 +285,6 @@ export class CourierRepository {
         id_orders: rawId,
         id: CryptoUtil.encryptId(rawId) ?? String(rawId),
         users_id: rawUserId,
-        user_id: rawUserId ? (CryptoUtil.encryptId(rawUserId) ?? String(rawUserId)) : undefined,
       };
     });
   }
@@ -355,6 +387,8 @@ export class CourierRepository {
       throw new Error('Minimal penarikan dana adalah Rp 10.000');
     }
 
+    const cleanBank = normalizeBankName(bankName);
+
     const userRes = await query<any>(
       'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
       [resolvedUserId],
@@ -381,7 +415,7 @@ export class CourierRepository {
         numAmount,
         currentBal,
         newBal,
-        `Penarikan Dana (${bankName})`,
+        `Penarikan Dana (${cleanBank})`,
         `Penarikan ke rekening ${accountNumber} a.n. ${accountName}`,
         ref,
       ],
@@ -391,7 +425,7 @@ export class CourierRepository {
       `INSERT INTO withdrawal_requests 
        (users_id, amount, bank_name, account_number, account_name, status, admin_notes, created_at)
        VALUES (?, ?, ?, ?, ?, 'pending', ?, NOW())`,
-      [resolvedUserId, numAmount, bankName, accountNumber, accountName, notes || null],
+      [resolvedUserId, numAmount, cleanBank, accountNumber, accountName, notes || null],
     );
 
     const insertedId = insertRes?.insertId;
@@ -409,14 +443,14 @@ export class CourierRepository {
       await notifRepo.create({
         target_role: 'admin',
         title: 'Pengajuan Penarikan Dana (WD)',
-        message: `Kurir ${userRes[0].name_users || 'Kurir'} mengajukan penarikan dana sebesar ${formattedAmt} ke rekening ${bankName} (${accountNumber} a.n. ${accountName}).`,
+        message: `Kurir ${userRes[0].name_users || 'Kurir'} mengajukan penarikan dana sebesar ${formattedAmt} ke rekening ${cleanBank} (${accountNumber} a.n ${accountName}).`,
         type: 'withdrawal_requested',
         data: {
           withdrawal_id: insertedId,
           courier_id: resolvedUserId,
           courier_name: userRes[0].name_users,
           amount: numAmount,
-          bank_name: bankName,
+          bank_name: cleanBank,
           account_number: accountNumber,
           account_name: accountName,
         },
@@ -427,12 +461,12 @@ export class CourierRepository {
       await notifRepo.create({
         users_id: resolvedUserId,
         title: 'Pengajuan Penarikan Dana Terkirim',
-        message: `Pengajuan penarikan dana sebesar ${formattedAmt} ke rekening ${bankName} (${accountNumber}) sedang diproses oleh admin.`,
+        message: `Pengajuan penarikan dana sebesar ${formattedAmt} ke rekening ${cleanBank} (${accountNumber}) sedang diproses oleh admin.`,
         type: 'withdrawal_submitted',
         data: {
           withdrawal_id: insertedId,
           amount: numAmount,
-          bank_name: bankName,
+          bank_name: cleanBank,
           account_number: accountNumber,
         },
         created_pic: resolvedUserId,
@@ -444,7 +478,7 @@ export class CourierRepository {
     return {
       id: CryptoUtil.encryptId(insertedId) ?? String(insertedId),
       amount: numAmount,
-      bank_name: bankName,
+      bank_name: cleanBank,
       account_number: accountNumber,
       account_name: accountName,
       status: 'pending',
@@ -485,6 +519,7 @@ export class CourierRepository {
 
     return rows.map((r) => ({
       ...r,
+      bank_name: normalizeBankName(r.bank_name),
       id: CryptoUtil.encryptId(r.id_withdrawal_requests) ?? String(r.id_withdrawal_requests),
       user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
       amount: Number(r.amount) || 0,
