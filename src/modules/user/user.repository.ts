@@ -755,6 +755,28 @@ export class UserRepository {
     const res: any = await query(sql, params);
     return res.affectedRows > 0;
   }
+
+  async unmarkUserVoucher(
+    orderId: string | number,
+    userId?: string | number | null
+  ): Promise<boolean> {
+    const numericOrderId = CryptoUtil.decryptId(orderId) ?? Number(orderId);
+    if (!numericOrderId) return false;
+
+    let sql = `UPDATE user_vouchers SET is_used = 0, used_at = NULL, orders_id = NULL WHERE orders_id = ?`;
+    const params: any[] = [numericOrderId];
+
+    if (userId) {
+      const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+      if (numericUserId) {
+        sql += ` AND users_id = ?`;
+        params.push(numericUserId);
+      }
+    }
+
+    const res: any = await query(sql, params);
+    return res.affectedRows > 0;
+  }
 }
 
 export interface PointHistoryEntity {

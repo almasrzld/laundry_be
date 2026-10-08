@@ -680,5 +680,105 @@ export class NotificationService {
       created_pic: params.processedBy || null,
     });
   }
+
+  // 13. Notifikasi Pengunggahan Bukti Pembayaran Manual (Transfer Bank)
+  async notifyPaymentProofUploaded(params: {
+    order: {
+      id_orders?: number | string;
+      id?: number | string;
+      invoice_no?: string;
+      users_id?: number | string | null;
+      user_id?: number | string | null;
+      service_name?: string;
+      customer_name?: string | null;
+    };
+    amount: number;
+    proofUrl: string;
+    uploaderUserId: number;
+    bankName?: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const { order, amount, proofUrl, uploaderUserId, bankName, creatorPic } = params;
+    const rawOrderId = order.id_orders ? (CryptoUtil.decryptId(order.id_orders) ?? Number(order.id_orders)) : CryptoUtil.decryptId(order.id);
+    const rawCustomerUserId = order.users_id ? (CryptoUtil.decryptId(order.users_id) ?? Number(order.users_id)) : (order.user_id ? CryptoUtil.decryptId(order.user_id) : uploaderUserId);
+    const invoiceNo = order.invoice_no || '';
+
+    const formattedAmount = new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0,
+    }).format(amount);
+
+    // 1. Notifikasi Personal ke Pelanggan
+    if (rawCustomerUserId) {
+      await this.notificationRepository.create({
+        users_id: rawCustomerUserId,
+        orders_id: rawOrderId,
+        title: 'Bukti Pembayaran Diunggah',
+        message: `Bukti transfer sebesar ${formattedAmount} untuk pesanan #${invoiceNo} (${order.service_name || 'Laundry'}) telah berhasil dikirim dan sedang dalam proses verifikasi kasir/admin.`,
+        type: 'payment_proof_uploaded',
+        target_role: null,
+        data: {
+          invoice_no: invoiceNo,
+          amount,
+          proof_url: proofUrl,
+          bank_name: bankName || null,
+        },
+        created_pic: creatorPic || uploaderUserId,
+      });
+    }
+
+    // 2. Notifikasi Operasional ke Staf Kasir / Admin
+    const customer = order.customer_name || 'Pelanggan';
+    await this.notificationRepository.create({
+      orders_id: rawOrderId,
+      title: 'Bukti Pembayaran Masuk',
+      message: `${customer} telah mengunggah bukti transfer sebesar ${formattedAmount} untuk pesanan #${invoiceNo}. Mohon segera diverifikasi.`,
+      type: 'payment_proof_submitted',
+      target_role: 'staff',
+      data: {
+        invoice_no: invoiceNo,
+        amount,
+        proof_url: proofUrl,
+        customer_name: customer,
+        bank_name: bankName || null,
+      },
+      created_pic: creatorPic || uploaderUserId,
+    });
+  }
+
+  // 14. Notifikasi Penolakan Bukti Pembayaran Manual
+  async notifyPaymentProofRejected(params: {
+    order: {
+      id_orders?: number | string;
+      id?: number | string;
+      invoice_no?: string;
+      users_id?: number | string | null;
+      user_id?: number | string | null;
+    };
+    reason?: string;
+    creatorPic?: number | null;
+  }): Promise<void> {
+    const { order, reason, creatorPic } = params;
+    const rawOrderId = order.id_orders ? (CryptoUtil.decryptId(order.id_orders) ?? Number(order.id_orders)) : CryptoUtil.decryptId(order.id);
+    const rawCustomerUserId = order.users_id ? (CryptoUtil.decryptId(order.users_id) ?? Number(order.users_id)) : (order.user_id ? CryptoUtil.decryptId(order.user_id) : null);
+    const invoiceNo = order.invoice_no || '';
+
+    if (rawCustomerUserId) {
+      await this.notificationRepository.create({
+        users_id: rawCustomerUserId,
+        orders_id: rawOrderId,
+        title: 'Bukti Pembayaran Ditolak',
+        message: `Bukti transfer untuk pesanan #${invoiceNo} ditolak${reason ? `: "${reason}"` : ''}. Silakan unggah ulang bukti transfer yang valid.`,
+        type: 'payment_proof_rejected',
+        target_role: null,
+        data: {
+          invoice_no: invoiceNo,
+          reason: reason || null,
+        },
+        created_pic: creatorPic || null,
+      });
+    }
+  }
 }
 

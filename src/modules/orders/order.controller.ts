@@ -115,7 +115,7 @@ export class OrderController {
           user_id: String(userId),
           service_name,
           service_type,
-          quantity: parseFloat(quantity) || 1.0,
+          quantity: (quantity !== undefined && quantity !== null && !isNaN(Number(quantity))) ? Number(quantity) : 0,
           unit: unit || 'kg',
           price_per_unit: parseInt(price_per_unit, 10),
           delivery_fee: delivery_fee !== undefined ? Number(delivery_fee) : 0,
@@ -247,6 +247,41 @@ export class OrderController {
       sendSuccess(res, { success }, 'Terima kasih atas penilaian dan ulasan Anda!');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menyimpan ulasan pesanan', 400);
+    }
+  };
+
+  applyPromo = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const { code } = req.body;
+      const user = req.user;
+      if (!user) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      if (!code || !String(code).trim()) {
+        sendError(res, 'Kode promo / voucher wajib diisi', 400);
+        return;
+      }
+      const updatedOrder = await this.orderService.applyPromo(id, String(code).trim(), user.id);
+      sendSuccess(res, updatedOrder, 'Promo voucher berhasil dipasang ke pesanan');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal memasang voucher promo', 400);
+    }
+  };
+
+  removePromo = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const user = req.user;
+      if (!user) {
+        sendError(res, 'Sesi autentikasi tidak valid', 401);
+        return;
+      }
+      const updatedOrder = await this.orderService.removePromo(id, user.id);
+      sendSuccess(res, updatedOrder, 'Promo voucher berhasil dihapus dari pesanan');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menghapus voucher promo', 400);
     }
   };
 }

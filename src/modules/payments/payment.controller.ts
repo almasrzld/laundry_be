@@ -23,9 +23,9 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.createPayment(order_id, payment_method, phone);
-      sendSuccess(res, result, 'Pembayaran Xendit berhasil disiapkan', 201);
+      sendSuccess(res, result, 'Pembayaran berhasil disiapkan', 201);
     } catch (error: any) {
-      sendError(res, error.message || 'Gagal membuat pembayaran Xendit', 400);
+      sendError(res, error.message || 'Gagal menyiapkan pembayaran digital', 400);
     }
   };
 
@@ -41,9 +41,9 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.createQrisPayment(order_id);
-      sendSuccess(res, result, 'Dynamic QRIS Xendit berhasil dibuat', 201);
+      sendSuccess(res, result, 'Dynamic QRIS berhasil dibuat', 201);
     } catch (error: any) {
-      sendError(res, error.message || 'Gagal membuat Dynamic QRIS Xendit', 400);
+      sendError(res, error.message || 'Gagal membuat Dynamic QRIS', 400);
     }
   };
 
@@ -64,7 +64,7 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.createTopupQrisPayment(userId, Number(amount));
-      sendSuccess(res, result, 'Dynamic QRIS Xendit Top-Up berhasil dibuat', 201);
+      sendSuccess(res, result, 'Dynamic QRIS Top-Up berhasil dibuat', 201);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal membuat Dynamic QRIS Top-Up', 400);
     }

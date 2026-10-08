@@ -3,6 +3,7 @@ import { CryptoUtil } from '../../utils/crypto.util';
 import { InvoiceGeneratorUtil } from '../../utils/invoice-generator.util';
 import { NotificationService } from '../notifications/notification.service';
 import { UserRepository } from '../user/user.repository';
+import { PromoRepository } from '../promos/promo.repository';
 import { PaymentRepository } from '../payments/payment.repository';
 import { query } from '../../config/database';
 
@@ -358,7 +359,7 @@ export class OrderService {
 
         // Cek apakah pesanan ini sudah pernah dipotong di wallet_transactions sebelumnya
         const existingDebit = await query<any>(
-          'SELECT id_wallet_transactions FROM wallet_transactions WHERE orders_id = ? AND type = "debit" AND deleted_at IS NULL LIMIT 1',
+          'SELECT id_wallet_transactions FROM wallet_transactions WHERE orders_id = ? AND type = "debit" LIMIT 1',
           [numericOrderId]
         );
         const hasExistingDebit = existingDebit && existingDebit.length > 0;
@@ -605,5 +606,185 @@ export class OrderService {
     }
 
     return result;
+  }
+
+  async applyPromo(
+    orderId: string | number,
+    code: string,
+    userId: string | number
+  ): Promise<OrderEntity> {
+    const existingOrder = await this.orderRepository.findById(String(orderId));
+    if (!existingOrder) {
+      throw new Error('Pesanan laundry tidak ditemukan');
+    }
+
+    const rawOrderOwnerId = existingOrder.users_id 
+      ? Number(existingOrder.users_id) 
+      : (existingOrder.user_id ? Number(CryptoUtil.decryptId(existingOrder.user_id) ?? existingOrder.user_id) : null);
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+
+    if (numericUserId && rawOrderOwnerId && numericUserId !== rawOrderOwnerId) {
+      throw new Error('Hanya pelanggan pemilik pesanan ini yang dapat menggunakan voucher promo.');
+    }
+
+    // Periksa status pembayaran
+    const notesLower = (existingOrder.notes || '').toLowerCase();
+    if (notesLower.includes('lunas') || existingOrder.status === 'completed' || existingOrder.status_code === 'pesanan-selesai') {
+      throw new Error('Voucher tidak dapat digunakan karena pesanan sudah dibayar / lunas.');
+    }
+
+    // Periksa kuantitas / penimbangan
+    const isKiloan = (existingOrder.unit || '').toLowerCase() === 'kg' || (existingOrder.service_type || '').toLowerCase().includes('kilo');
+    const quantity = Number(existingOrder.quantity) || 0;
+    if (isKiloan && quantity <= 0) {
+      throw new Error('Pesanan belum ditimbang oleh pihak laundry. Voucher dapat dipasang setelah cucian selesai ditimbang.');
+    }
+
+    const cleanCode = (code || '').trim().toUpperCase();
+    if (!cleanCode) {
+      throw new Error('Kode voucher tidak boleh kosong');
+    }
+
+    // 1. Cari voucher di user_vouchers milik user ini
+    let voucher: any = await this.userRepository.findUserVoucherByCode(numericUserId, cleanCode, true);
+    
+    // 2. Jika tidak ada di user_vouchers, cari di event promos master
+    if (!voucher) {
+      const promoRepo = new PromoRepository();
+      const eventPromo = await promoRepo.findByCode(cleanCode);
+      if (eventPromo && eventPromo.is_active !== false) {
+        voucher = {
+          code: eventPromo.code,
+          code_voucher: eventPromo.code,
+          title: eventPromo.name_promos || eventPromo.title,
+          category: eventPromo.category,
+          benefit_type: eventPromo.benefit_type,
+          discount_type: eventPromo.discount_type,
+          discount_amount: eventPromo.discount_amount,
+          max_discount: eventPromo.max_discount,
+          min_order_amount: eventPromo.min_order_amount,
+          start_date: eventPromo.start_date,
+          end_date: eventPromo.end_date,
+        };
+      }
+    }
+
+    if (!voucher) {
+      throw new Error(`Voucher dengan kode "${cleanCode}" tidak valid atau belum Anda miliki.`);
+    }
+
+    // Cek periode aktif
+    const today = new Date().toISOString().slice(0, 10);
+    if (voucher.start_date && String(voucher.start_date).slice(0, 10) > today) {
+      throw new Error(`Voucher "${cleanCode}" baru berlaku mulai tanggal ${voucher.start_date}.`);
+    }
+    if (voucher.end_date && String(voucher.end_date).slice(0, 10) < today) {
+      throw new Error(`Voucher "${cleanCode}" telah kedaluwarsa.`);
+    }
+
+    const priceNum = Number(existingOrder.price_per_unit) || 0;
+    const subtotal = quantity * priceNum;
+    const deliveryFee = Number(existingOrder.delivery_fee) || 0;
+
+    // Cek minimal belanja
+    const minOrder = Number(voucher.min_order_amount) || 0;
+    if (minOrder > 0 && subtotal < minOrder) {
+      throw new Error(`Minimal belanja untuk voucher ini adalah Rp ${minOrder.toLocaleString('id-ID')}. Total cucian Anda saat ini Rp ${subtotal.toLocaleString('id-ID')}.`);
+    }
+
+    // Hitung potongan diskon
+    let calculatedDiscount = 0;
+    const benefitTypeLower = (voucher.benefit_type || '').toLowerCase();
+    const discountTypeLower = (voucher.discount_type || '').toLowerCase();
+    const discountAmount = Number(voucher.discount_amount) || 0;
+    const maxDiscount = (voucher.max_discount !== null && voucher.max_discount !== undefined && Number(voucher.max_discount) > 0) 
+      ? Number(voucher.max_discount) 
+      : null;
+
+    if (benefitTypeLower.includes('bebas') || benefitTypeLower.includes('free')) {
+      // Bebas Ongkir
+      calculatedDiscount = deliveryFee;
+      if (maxDiscount !== null) {
+        calculatedDiscount = Math.min(calculatedDiscount, maxDiscount);
+      }
+    } else if (benefitTypeLower.includes('ongkir') || benefitTypeLower.includes('delivery')) {
+      // Potongan Ongkir
+      if (discountTypeLower.includes('persen') || discountTypeLower.includes('percent')) {
+        let calc = Math.floor((deliveryFee * discountAmount) / 100);
+        if (maxDiscount !== null) calc = Math.min(calc, maxDiscount);
+        calculatedDiscount = Math.min(calc, deliveryFee);
+      } else {
+        calculatedDiscount = Math.min(discountAmount, deliveryFee);
+      }
+    } else {
+      // Potongan Harga Cucian / Layanan
+      if (discountTypeLower.includes('persen') || discountTypeLower.includes('percent')) {
+        let calc = Math.floor((subtotal * discountAmount) / 100);
+        if (maxDiscount !== null) calc = Math.min(calc, maxDiscount);
+        calculatedDiscount = Math.min(calc, subtotal);
+      } else {
+        calculatedDiscount = Math.min(discountAmount, subtotal);
+      }
+    }
+
+    const validOrderId = existingOrder.id_orders ?? existingOrder.id ?? orderId;
+
+    // Kembalikan voucher lama jika ada
+    await this.userRepository.unmarkUserVoucher(validOrderId, numericUserId);
+
+    // Tandai voucher baru sebagai terpakai
+    await this.userRepository.markUserVoucherAsUsed(numericUserId, cleanCode, validOrderId);
+
+    // Update catatan order
+    let cleanedNotes = (existingOrder.notes || '').replace(/\[Promo: [^\]]+\]/g, '').trim();
+    cleanedNotes = `${cleanedNotes} [Promo: ${cleanCode} (-Rp ${calculatedDiscount.toLocaleString('id-ID')})]`.trim();
+
+    const updated = await this.orderRepository.updateOrder(validOrderId, {
+      discount: calculatedDiscount,
+      notes: cleanedNotes,
+    });
+
+    const finalOrder = updated || (await this.orderRepository.findById(validOrderId))!;
+    return this.formatOrder(finalOrder);
+  }
+
+  async removePromo(
+    orderId: string | number,
+    userId: string | number
+  ): Promise<OrderEntity> {
+    const existingOrder = await this.orderRepository.findById(String(orderId));
+    if (!existingOrder) {
+      throw new Error('Pesanan laundry tidak ditemukan');
+    }
+
+    const rawOrderOwnerId = existingOrder.users_id 
+      ? Number(existingOrder.users_id) 
+      : (existingOrder.user_id ? Number(CryptoUtil.decryptId(existingOrder.user_id) ?? existingOrder.user_id) : null);
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+
+    if (numericUserId && rawOrderOwnerId && numericUserId !== rawOrderOwnerId) {
+      throw new Error('Hanya pelanggan pemilik pesanan ini yang dapat mengubah voucher promo.');
+    }
+
+    const notesLower = (existingOrder.notes || '').toLowerCase();
+    if (notesLower.includes('lunas') || existingOrder.status === 'completed' || existingOrder.status_code === 'pesanan-selesai') {
+      throw new Error('Tidak dapat menghapus voucher karena pesanan sudah dibayar / lunas.');
+    }
+
+    const validOrderId = existingOrder.id_orders ?? existingOrder.id ?? orderId;
+
+    // Kembalikan voucher
+    await this.userRepository.unmarkUserVoucher(validOrderId, numericUserId);
+
+    // Bersihkan tag promo dari notes
+    const cleanedNotes = (existingOrder.notes || '').replace(/\[Promo: [^\]]+\]/g, '').trim();
+
+    const updated = await this.orderRepository.updateOrder(validOrderId, {
+      discount: 0,
+      notes: cleanedNotes,
+    });
+
+    const finalOrder = updated || (await this.orderRepository.findById(validOrderId))!;
+    return this.formatOrder(finalOrder);
   }
 }

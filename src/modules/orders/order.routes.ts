@@ -15,5 +15,7 @@ router.patch('/:id/status', authMiddleware, controller.updateStatus);
 router.put('/:id/status', authMiddleware, controller.updateStatus);
 router.post('/:id/rating', authMiddleware, controller.submitRating);
 router.post('/:id/review', authMiddleware, controller.submitRating);
+router.post('/:id/apply-promo', authMiddleware, controller.applyPromo);
+router.post('/:id/remove-promo', authMiddleware, controller.removePromo);
 
 export default router;

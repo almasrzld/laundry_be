@@ -128,9 +128,14 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
           description TEXT NULL,
           reference_no VARCHAR(100) NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          deleted_at DATETIME NULL,
           FOREIGN KEY (users_id) REFERENCES users(id_users) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
       `);
+
+      try { await connection.query(`ALTER TABLE wallet_transactions ADD COLUMN updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP AFTER created_at`); } catch (_) {}
+      try { await connection.query(`ALTER TABLE wallet_transactions ADD COLUMN deleted_at DATETIME NULL AFTER updated_at`); } catch (_) {}
     } catch (e: any) {
       console.warn('  ▲ [Migration Info] wallet_transactions table check:', e.message);
     }

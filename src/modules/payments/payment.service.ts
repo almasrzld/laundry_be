@@ -274,7 +274,7 @@ export class PaymentService {
       userId,
       amount,
       'QRIS',
-      'Pengisian saldo instan via QRIS Xendit'
+      'Pengisian saldo instan via QRIS'
     );
 
     const rawTopupId = CryptoUtil.decryptId(topupReq.topup_id) ?? Number(topupReq.topup_id);
@@ -329,7 +329,7 @@ export class PaymentService {
       }
 
       // Update status topup & tambah saldo pengguna secara otomatis
-      await this.systemRepository.updateTopupStatus(rawTopupId, 'completed', 'Lunas Otomatis via QRIS Xendit');
+      await this.systemRepository.updateTopupStatus(rawTopupId, 'completed', 'Lunas Otomatis via QRIS');
 
       return {
         success: true,
@@ -435,6 +435,18 @@ export class PaymentService {
     // Simpan ke database
     await this.paymentRepository.savePaymentProof(orderId, processed.relativeUrl, Number(userId) || 1, totalAmount);
 
+    // Kirim notifikasi lonceng ke akun Pelanggan & Staf Admin / Kasir
+    try {
+      await this.notificationService.notifyPaymentProofUploaded({
+        order,
+        amount: totalAmount,
+        proofUrl: processed.relativeUrl,
+        uploaderUserId: Number(userId) || 1,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification Warning] Gagal membuat notifikasi bukti transfer diunggah:', notifErr);
+    }
+
     return {
       order_id: CryptoUtil.encryptId(orderId),
       invoice_no: order.invoice_no,
@@ -524,44 +536,56 @@ export class PaymentService {
 
     const tx = await this.paymentRepository.getTransactionByOrderId(orderId);
     const order = await this.orderRepository.findById(orderId);
+    const isKiloan = (order?.unit || '').toLowerCase() === 'kg' || (order?.service_type || '').toLowerCase().includes('kilo');
+    const isWaitingWeighing = isKiloan && Number(order?.quantity || 0) <= 0;
     const notesLower = (order?.notes || '').toLowerCase();
-    const isLunasInNotes = notesLower.includes('lunas');
-    const isFree = notesLower.includes('lunas (voucher & poin)');
 
     // Cek apakah ada record debit pembayaran di wallet_transactions
     let hasWalletDebit = false;
     if (order?.invoice_no) {
       const walletDebit = await query<any>(
-        "SELECT id_wallet_transactions FROM wallet_transactions WHERE type = 'debit' AND (reference_id = ? OR description LIKE ?) AND deleted_at IS NULL LIMIT 1",
-        [order.invoice_no, `%${order.invoice_no}%`]
+        "SELECT id_wallet_transactions FROM wallet_transactions WHERE type = 'debit' AND (reference_no = ? OR orders_id = ? OR description LIKE ?) LIMIT 1",
+        [order.invoice_no, orderId, `%${order.invoice_no}%`]
       );
       hasWalletDebit = Boolean(walletDebit && walletDebit.length > 0);
     }
 
-    const isPaidLPay = notesLower.includes('laundrypay') && (isLunasInNotes || hasWalletDebit);
+    const isPaidLPay = (tx?.payment_method === 'Saldo LaundryPay' && tx?.status === 'PAID') || hasWalletDebit;
+    const isExplicitlyMarkedPaid = notesLower.includes('[lunas via') || notesLower.includes('[lunas]') || notesLower.includes('(diverifikasi admin)');
+    const isFree = !isKiloan && notesLower.includes('lunas (voucher & poin)');
 
-    if (tx?.status === 'PAID' || isPaidLPay || isFree || isLunasInNotes) {
+    // Kiloan yang belum ditimbang atau belum ada pelunasan tidak boleh berstatus PAID
+    const isPaid = (tx?.status === 'PAID' || isPaidLPay || isFree || isExplicitlyMarkedPaid) && !isWaitingWeighing;
+
+    const methodFromNotes = notesLower.includes('qris')
+      ? 'QRIS'
+      : (notesLower.includes('laundrypay') || notesLower.includes('saldo')
+        ? 'Saldo LaundryPay'
+        : (notesLower.includes('tunai') || notesLower.includes('cod')
+          ? 'Tunai / COD'
+          : (notesLower.includes('transfer') || notesLower.includes('bank') || notesLower.includes('bca') || notesLower.includes('mandiri') || notesLower.includes('bri') || notesLower.includes('bni')
+            ? 'Transfer Bank'
+            : 'QRIS')));
+
+    if (isPaid) {
       const orderAmount = tx?.amount ?? Math.max(0, ((order?.quantity || 1) * (order?.price_per_unit || 0)) + (order?.delivery_fee || 0) - (order?.discount || 0));
       return {
         order_id: CryptoUtil.encryptId(orderId),
         status: 'PAID',
         paid_at: tx?.paid_at || order?.order_date || new Date(),
         amount: orderAmount,
-        payment_method: tx?.payment_method || (isPaidLPay ? 'Saldo LaundryPay' : (isFree ? 'Voucher & Poin' : 'TRANSFER_BANK')),
+        payment_method: tx?.payment_method || (isPaidLPay ? 'Saldo LaundryPay' : (isFree ? 'Voucher & Poin' : methodFromNotes)),
         proof_image: tx?.proof_image || null,
+        is_waiting_weighing: false,
       };
     }
-
-    // Jika belum dibayar, cek apakah kiloan dan belum ditimbang
-    const isKiloan = (order?.unit || '').toLowerCase() === 'kg' || (order?.service_type || '').toLowerCase().includes('kilo');
-    const isWaitingWeighing = isKiloan && Number(order?.quantity || 0) <= 0;
 
     return {
       order_id: CryptoUtil.encryptId(orderId),
       status: isWaitingWeighing ? 'WAITING_WEIGHING' : (tx?.status || 'UNPAID'),
       paid_at: null,
       amount: Math.max(0, ((order?.quantity || 0) * (order?.price_per_unit || 0)) + (order?.delivery_fee || 0) - (order?.discount || 0)),
-      payment_method: tx?.payment_method || (notesLower.includes('laundrypay') ? 'Saldo LaundryPay' : (notesLower.includes('tunai') || notesLower.includes('cod') ? 'Tunai / COD' : 'TRANSFER_BANK')),
+      payment_method: tx?.payment_method || methodFromNotes,
       proof_image: tx?.proof_image || null,
       is_waiting_weighing: isWaitingWeighing,
     };
@@ -593,7 +617,7 @@ export class PaymentService {
 
     // Cek apakah pesanan ini sudah pernah dipotong di wallet_transactions sebelumnya
     const existingDebit = await query<any>(
-      'SELECT id_wallet_transactions FROM wallet_transactions WHERE orders_id = ? AND type = "debit" AND deleted_at IS NULL LIMIT 1',
+      'SELECT id_wallet_transactions FROM wallet_transactions WHERE orders_id = ? AND type = "debit" LIMIT 1',
       [numericOrderId]
     );
     if (existingDebit && existingDebit.length > 0) {
@@ -735,7 +759,7 @@ export class PaymentService {
       const rawTopupId = Number(parts[2]);
       if (rawTopupId && (status === 'SUCCEEDED' || status === 'COMPLETED' || status === 'PAID' || event === 'qr.payment.succeeded')) {
         await this.paymentRepository.updateTransactionStatus(referenceId, 'PAID', new Date());
-        await this.systemRepository.updateTopupStatus(rawTopupId, 'completed', 'Lunas Otomatis via QRIS Xendit Webhook');
+        await this.systemRepository.updateTopupStatus(rawTopupId, 'completed', 'Lunas Otomatis via QRIS Webhook');
         return { received: true, success: true, topup_id: rawTopupId };
       }
     }
