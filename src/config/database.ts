@@ -515,6 +515,116 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
       console.warn('  ▲ [Migration Info] tips balance & transaction sync:', e.message);
     }
 
+    // Auto-create activity_logs table if not exists
+    try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS activity_logs (
+          id_activity_logs INT AUTO_INCREMENT PRIMARY KEY,
+          log_type ENUM('main', 'secondary') NOT NULL DEFAULT 'main',
+          users_id INT NULL,
+          user_code VARCHAR(50) NULL,
+          user_name VARCHAR(150) NULL,
+          user_role VARCHAR(50) NULL,
+          activity TEXT NOT NULL,
+          ip_address VARCHAR(45) NULL,
+          location VARCHAR(255) NULL,
+          user_agent TEXT NULL,
+          payload JSON NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          creator BIGINT UNSIGNED NULL,
+          updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+          update_pic BIGINT UNSIGNED NULL,
+          deleted_at DATETIME NULL,
+          delete_pic BIGINT UNSIGNED NULL,
+          INDEX idx_act_logs_type (log_type),
+          INDEX idx_act_logs_users (users_id),
+          INDEX idx_act_logs_user_code (user_code),
+          INDEX idx_act_logs_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+
+      // Auto-register permission: log-activity.index
+      try {
+        // Update previous key if any
+        await connection.query(
+          "UPDATE permissions SET code = 'log-activity.index', name_permissions = 'Lihat Log Activity' WHERE LOWER(code) IN ('system.activity-log', 'log-activity', 'activity-log.index') AND deleted_at IS NULL"
+        );
+
+        const [existingPerm]: any = await connection.query(
+          "SELECT id_permissions FROM permissions WHERE LOWER(code) = 'log-activity.index' AND deleted_at IS NULL LIMIT 1"
+        );
+        let permId: number | null = null;
+        if (!existingPerm || existingPerm.length === 0) {
+          const [insPerm]: any = await connection.query(`
+            INSERT INTO permissions (name_permissions, code, module, created_at, creator)
+            VALUES ('Lihat Log Activity', 'log-activity.index', 'System', NOW(), 1)
+          `);
+          permId = insPerm.insertId;
+        } else {
+          permId = existingPerm[0].id_permissions;
+        }
+
+        // Grant permission to superadmin and admin roles
+        if (permId) {
+          const [adminRoles]: any = await connection.query(
+            "SELECT id_roles FROM roles WHERE LOWER(code) IN ('superadmin', 'admin', 'administrator', 'kasir', 'operator') AND deleted_at IS NULL"
+          );
+          if (Array.isArray(adminRoles)) {
+            for (const r of adminRoles) {
+              const [hasRolePerm]: any = await connection.query(
+                "SELECT id_role_menus FROM role_permissions WHERE roles_id = ? AND permissions_id = ? AND deleted_at IS NULL LIMIT 1",
+                [r.id_roles, permId]
+              );
+              if (!hasRolePerm || hasRolePerm.length === 0) {
+                await connection.query(
+                  "INSERT INTO role_permissions (roles_id, permissions_id, created_at, creator) VALUES (?, ?, NOW(), 1)",
+                  [r.id_roles, permId]
+                );
+              }
+            }
+          }
+        }
+      } catch (pErr: any) {
+        console.warn('  ▲ [Migration Info] log-activity.index permission check:', pErr.message);
+      }
+
+      // Auto-register sub menu: Log Activity under System with path /system/log-activity
+      try {
+        // Update previous menu if any
+        await connection.query(`
+          UPDATE menus 
+          SET \`key\` = 'system.log-activity', 
+              name_menus = 'Log Activity', 
+              path = '/system/log-activity', 
+              nama_akses = 'log-activity.index' 
+          WHERE (LOWER(path) IN ('/system/activity-log', '/activity-log', '/system/log-activity') OR LOWER(\`key\`) IN ('system.activity-log', 'system.log-activity')) 
+            AND deleted_at IS NULL
+        `);
+
+        const [existingMenu]: any = await connection.query(
+          "SELECT id_menus FROM menus WHERE LOWER(path) = '/system/log-activity' AND deleted_at IS NULL LIMIT 1"
+        );
+        if (!existingMenu || existingMenu.length === 0) {
+          // Cari ID parent menu System
+          const [systemParent]: any = await connection.query(
+            "SELECT id_menus FROM menus WHERE (LOWER(name_menus) = 'system' OR LOWER(`key`) = 'system') AND (menus_id IS NULL OR menus_id = 0) AND deleted_at IS NULL LIMIT 1"
+          );
+          const parentId = systemParent && systemParent.length > 0 ? systemParent[0].id_menus : null;
+
+          await connection.query(`
+            INSERT INTO menus (\`key\`, name_menus, path, nama_akses, icon, menus_id, order_index, is_active, is_sidebar, created_at, creator)
+            VALUES ('system.log-activity', 'Log Activity', '/system/log-activity', 'log-activity.index', 'Activity', ?, 99, 1, 1, NOW(), 1)
+          `, [parentId]);
+          console.log('  ✔ [Migration] Menu "Log Activity" registered at /system/log-activity successfully.');
+        }
+      } catch (mErr: any) {
+        console.warn('  ▲ [Migration Info] Log Activity menu check:', mErr.message);
+      }
+
+    } catch (e: any) {
+      console.warn('  ▲ [Migration Info] activity_logs table check:', e.message);
+    }
+
     connection.release();
     return true;
   } catch (error: any) {

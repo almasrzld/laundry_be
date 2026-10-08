@@ -3,6 +3,7 @@ import { PaymentService } from './payment.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { CryptoUtil } from '../../utils/crypto.util';
+import { ActivityLogMain } from '../activity-logs/activity-log.helper';
 
 export class PaymentController {
   private paymentService: PaymentService;
@@ -23,6 +24,11 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.createPayment(order_id, payment_method, phone);
+      ActivityLogMain(
+        req,
+        `Menyiapkan Pembayaran Pesanan #${result?.invoice_no || order_id} (${result?.payment_method || payment_method || 'Online'})`,
+        req.body
+      );
       sendSuccess(res, result, 'Pembayaran berhasil disiapkan', 201);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menyiapkan pembayaran digital', 400);
@@ -41,6 +47,11 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.createQrisPayment(order_id);
+      ActivityLogMain(
+        req,
+        `Membuat Dynamic QRIS Pembayaran Pesanan #${result?.invoice_no || order_id}`,
+        req.body
+      );
       sendSuccess(res, result, 'Dynamic QRIS berhasil dibuat', 201);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal membuat Dynamic QRIS', 400);
@@ -64,6 +75,11 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.createTopupQrisPayment(userId, Number(amount));
+      ActivityLogMain(
+        req,
+        `Membuat Dynamic QRIS Top-Up Saldo LaundryPay Sebesar Rp ${Number(amount).toLocaleString('id-ID')}`,
+        req.body
+      );
       sendSuccess(res, result, 'Dynamic QRIS Top-Up berhasil dibuat', 201);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal membuat Dynamic QRIS Top-Up', 400);
@@ -83,6 +99,7 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.simulatePayment(order_id);
+      ActivityLogMain(req, `Melakukan Simulasi Pembayaran Sandbox untuk Pesanan #${order_id}`, req.body);
       sendSuccess(res, result, 'Simulasi pembayaran Sandbox berhasil diproses');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal melakukan simulasi pembayaran', 400);
@@ -121,6 +138,11 @@ export class PaymentController {
 
       const userId = req.user?.id;
       const result = await this.paymentService.uploadPaymentProof(orderId, req.file, userId);
+      ActivityLogMain(
+        req,
+        `Mengunggah Bukti Pembayaran Manual untuk Pesanan #${result?.invoice_no || orderId}`,
+        { order_id: orderId, file_size_kb: result?.file_size_kb }
+      );
       sendSuccess(res, result, 'Bukti pembayaran berhasil diunggah dan sedang diverifikasi admin', 201);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal mengunggah bukti pembayaran', 400);
@@ -143,6 +165,11 @@ export class PaymentController {
         ? (CryptoUtil.decryptId(req.user.id) || parseInt(req.user.id, 10))
         : (req.user?.id || 1);
       const result = await this.paymentService.confirmManualPayment(order_id, adminId);
+      ActivityLogMain(
+        req,
+        `Admin Mengonfirmasi Lunas Pembayaran Pesanan #${result?.invoice_no || order_id}`,
+        { order_id, status: 'PAID' }
+      );
       sendSuccess(res, result, 'Pembayaran berhasil dikonfirmasi Lunas');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal mengonfirmasi pembayaran', 400);
@@ -163,6 +190,11 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.payWithLaundryPay(order_id, userId);
+      ActivityLogMain(
+        req,
+        `Membayar Pesanan #${result?.invoice_no || order_id} Menggunakan Saldo LaundryPay`,
+        { order_id, balance_after: result?.balance_after }
+      );
       sendSuccess(res, result, 'Pembayaran dengan Saldo LaundryPay berhasil', 200);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal memproses pembayaran Saldo LaundryPay', 400);
@@ -182,6 +214,11 @@ export class PaymentController {
       }
 
       const result = await this.paymentService.switchPaymentMethod(order_id, payment_method);
+      ActivityLogMain(
+        req,
+        `Mengubah Metode Pembayaran Pesanan #${result?.invoice_no || order_id} Menjadi: ${payment_method}`,
+        req.body
+      );
       sendSuccess(res, result, 'Metode pembayaran pesanan berhasil diubah', 200);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal mengubah metode pembayaran', 400);

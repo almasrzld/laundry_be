@@ -527,15 +527,69 @@ export class OrderService {
       throw new Error('Hanya pelanggan pemilik pesanan ini yang dapat memberikan ulasan dan rating.');
     }
 
+    const customerUserId = data.userId 
+      ? Number(data.userId) 
+      : (rawOrderOwnerId ? Number(rawOrderOwnerId) : null);
+
     const prevTip = Number(existingOrder?.tip_amount) || 0;
     const newTip = Math.max(0, Number(data.tip_amount) || 0);
     const tipDelta = newTip - prevTip;
 
+    // Validasi saldo pelanggan jika memberikan tips (tipDelta > 0)
+    let customerCurrentBal = 0;
+    if (tipDelta > 0) {
+      if (!customerUserId) {
+        throw new Error('Identitas akun pelanggan tidak valid untuk memberikan tips.');
+      }
+
+      const custRows = await query<any>(
+        'SELECT laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL',
+        [customerUserId]
+      );
+      customerCurrentBal = custRows && custRows.length > 0 ? (Number(custRows[0].laundry_pay_balance) || 0) : 0;
+
+      if (customerCurrentBal < tipDelta) {
+        throw new Error(
+          `Saldo LaundryPay Anda tidak mencukupi (Saldo saat ini: Rp ${customerCurrentBal.toLocaleString('id-ID')}). Dibutuhkan saldo Rp ${tipDelta.toLocaleString('id-ID')} untuk memberikan tips ke kurir. Silakan lakukan top up saldo terlebih dahulu.`
+        );
+      }
+    }
+
     const result = await this.orderRepository.submitRating(id, data);
+    if (!result) return false;
 
     // Jika ada tips (atau perubahan nilai tips) dan pesanan memiliki kurir bertugas
-    if (result && tipDelta !== 0 && existingOrder) {
+    if (tipDelta !== 0 && existingOrder) {
       try {
+        // 1. Potong saldo LaundryPay pelanggan (Debit)
+        if (tipDelta > 0 && customerUserId) {
+          const nextCustBal = Math.max(0, customerCurrentBal - tipDelta);
+          await query(
+            'UPDATE users SET laundry_pay_balance = GREATEST(0, COALESCE(laundry_pay_balance, 0) - ?) WHERE id_users = ?',
+            [tipDelta, customerUserId]
+          );
+
+          try {
+            await query(`
+              INSERT INTO wallet_transactions 
+                (users_id, orders_id, type, category, amount, balance_before, balance_after, title, description, reference_no)
+              VALUES (?, ?, 'debit', 'tip', ?, ?, ?, ?, ?, ?)
+            `, [
+              customerUserId,
+              existingOrder.id_orders ?? existingOrder.id,
+              tipDelta,
+              customerCurrentBal,
+              nextCustBal,
+              'Pemberian Tips Kurir',
+              `Tips sebesar Rp ${tipDelta.toLocaleString('id-ID')} untuk kurir pesanan #${existingOrder.invoice_no}`,
+              existingOrder.invoice_no
+            ]);
+          } catch (txErr: any) {
+            console.warn('[WalletTransaction Warning] Gagal mencatat debit tips pelanggan:', txErr?.message || txErr);
+          }
+        }
+
+        // 2. Cari kurir bertugas untuk dikreditkan saldonya
         let courierUserId: number | null = null;
         if (existingOrder.courier_users_id || existingOrder.courier_user_id) {
           courierUserId = Number(existingOrder.courier_users_id ?? existingOrder.courier_user_id);
@@ -557,18 +611,16 @@ export class OrderService {
         }
 
         if (courierUserId) {
-          // Dapatkan saldo kurir saat ini untuk mutasi
           const userBalRes = await query<any>('SELECT laundry_pay_balance FROM users WHERE id_users = ?', [courierUserId]);
           const currentBal = userBalRes && userBalRes.length > 0 ? (Number(userBalRes[0].laundry_pay_balance) || 0) : 0;
           const nextBal = currentBal + tipDelta;
 
-          // 1. Otomatis tambahkan tips ke saldo LaundryPay kurir
+          // Otomatis tambahkan tips ke saldo LaundryPay kurir (Credit)
           await query(
             'UPDATE users SET laundry_pay_balance = GREATEST(0, COALESCE(laundry_pay_balance, 0) + ?) WHERE id_users = ?',
             [tipDelta, courierUserId]
           );
 
-          // 2. Simpan ke riwayat transaksi dompet (wallet_transactions)
           if (tipDelta > 0) {
             const customerName = (existingOrder as any).customer_name || (existingOrder as any).user_name || 'Pelanggan';
             try {
@@ -590,7 +642,7 @@ export class OrderService {
               console.warn('[WalletTransaction Warning] Gagal mencatat mutasi tips kurir:', txErr?.message || txErr);
             }
 
-            // 3. Kirim notifikasi tips masuk ke akun kurir
+            // Kirim notifikasi tips masuk ke akun kurir
             await this.notificationService.notifyCourierTipReceived({
               courierUserId,
               orderId: existingOrder.id_orders ?? existingOrder.id,
@@ -601,7 +653,7 @@ export class OrderService {
           }
         }
       } catch (err: any) {
-        console.warn('[Courier Tip Warning] Gagal mengkreditkan saldo tips ke kurir:', err?.message || err);
+        console.warn('[Courier Tip Warning] Gagal memproses saldo tips ke kurir:', err?.message || err);
       }
     }
 

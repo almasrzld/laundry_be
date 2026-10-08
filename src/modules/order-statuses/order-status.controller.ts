@@ -3,6 +3,7 @@ import { OrderStatusService } from './order-status.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class OrderStatusController {
   private service = new OrderStatusService();
@@ -11,6 +12,7 @@ export class OrderStatusController {
     try {
       const search = req.query.search as string | undefined;
       const data = await this.service.getAllOrderStatuses(search);
+      ActivityLogSecondary(req, 'Mengakses Halaman Master Status Cucian', [search]);
       return sendSuccess(res, data, 'Data master status cucian berhasil diambil');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -22,6 +24,7 @@ export class OrderStatusController {
       const { id } = req.params;
       const item = await this.service.getOrderStatusById(id);
       if (!item) return sendError(res, 'Status tidak ditemukan', 404);
+      ActivityLogSecondary(req, 'Mengambil Detail Master Status Cucian', [id]);
       return sendSuccess(res, item, 'Detail master status cucian');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -39,6 +42,11 @@ export class OrderStatusController {
         { name, code, step_order, color_hex, badge_variant, description, is_active },
         creator,
       );
+      ActivityLogMain(
+        req,
+        `Menambahkan Master Status Cucian "${name}" (Kode: ${code}, Tahap: ${step_order || 1})`,
+        req.body
+      );
       return sendSuccess(res, created, 'Master status cucian berhasil ditambahkan', 201);
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -51,6 +59,11 @@ export class OrderStatusController {
       const updatePic = getPicId(req);
       const updated = await this.service.updateOrderStatus(id, req.body, updatePic);
       if (!updated) return sendError(res, 'Status tidak ditemukan', 404);
+      ActivityLogMain(
+        req,
+        `Memperbarui Master Status Cucian "${updated.name}" (Kode: ${updated.code})`,
+        { id, ...req.body }
+      );
       return sendSuccess(res, updated, 'Master status cucian berhasil diperbarui');
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -63,6 +76,7 @@ export class OrderStatusController {
       const deletePic = getPicId(req);
       const success = await this.service.deleteOrderStatus(id, deletePic);
       if (!success) return sendError(res, 'Gagal menghapus status atau data tidak ditemukan', 404);
+      ActivityLogMain(req, `Menghapus Master Status Cucian ID ${id}`, { id });
       return sendSuccess(res, { deleted: true }, 'Master status cucian berhasil dihapus');
     } catch (err: any) {
       return sendError(res, err.message, 400);

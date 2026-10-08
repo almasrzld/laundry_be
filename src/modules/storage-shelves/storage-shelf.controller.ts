@@ -3,6 +3,7 @@ import { StorageShelfService } from './storage-shelf.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class StorageShelfController {
   private service = new StorageShelfService();
@@ -11,6 +12,7 @@ export class StorageShelfController {
     try {
       const search = req.query.search as string | undefined;
       const data = await this.service.getAllShelves(search);
+      ActivityLogSecondary(req, 'Mengakses Halaman Master Rak Penyimpanan', [search]);
       return sendSuccess(res, data, 'Data master rak penyimpanan berhasil diambil');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -22,6 +24,7 @@ export class StorageShelfController {
       const { id } = req.params;
       const item = await this.service.getShelfById(id);
       if (!item) return sendError(res, 'Rak tidak ditemukan', 404);
+      ActivityLogSecondary(req, 'Mengambil Detail Master Rak Penyimpanan', [id]);
       return sendSuccess(res, item, 'Detail master rak penyimpanan');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -49,6 +52,11 @@ export class StorageShelfController {
         { name, code, capacity, location_notes, is_active },
         creator,
       );
+      ActivityLogMain(
+        req,
+        `Menambahkan Master Rak Penyimpanan "${name}" (Kode: ${code}, Kapasitas: ${capacity || 0})`,
+        req.body
+      );
       return sendSuccess(res, created, 'Master rak berhasil ditambahkan', 201);
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -61,6 +69,11 @@ export class StorageShelfController {
       const updatePic = getPicId(req);
       const updated = await this.service.updateShelf(id, req.body, updatePic);
       if (!updated) return sendError(res, 'Rak tidak ditemukan', 404);
+      ActivityLogMain(
+        req,
+        `Memperbarui Master Rak Penyimpanan "${updated.name}" (Kode: ${updated.code})`,
+        { id, ...req.body }
+      );
       return sendSuccess(res, updated, 'Master rak berhasil diperbarui');
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -73,6 +86,7 @@ export class StorageShelfController {
       const deletePic = getPicId(req);
       const success = await this.service.deleteShelf(id, deletePic);
       if (!success) return sendError(res, 'Gagal menghapus rak atau data tidak ditemukan', 404);
+      ActivityLogMain(req, `Menghapus Master Rak Penyimpanan ID ${id}`, { id });
       return sendSuccess(res, { deleted: true }, 'Master rak berhasil dihapus');
     } catch (err: any) {
       return sendError(res, err.message, 400);

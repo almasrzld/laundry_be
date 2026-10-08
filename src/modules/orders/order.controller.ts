@@ -5,6 +5,7 @@ import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { isCustomerRole, isCourierRole } from '../../utils/role.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class OrderController {
   private orderService: OrderService;
@@ -71,6 +72,7 @@ export class OrderController {
         }
       }
 
+      ActivityLogSecondary(req, `Melihat Detail Pesanan #${order.invoice_no || id}`, [id]);
       sendSuccess(res, order, 'Detail pesanan berhasil diambil');
     } catch (error: any) {
       sendError(res, error.message || 'Pesanan tidak ditemukan', 404);
@@ -133,6 +135,7 @@ export class OrderController {
         picId
       );
 
+      ActivityLogMain(req, `Membuat Pesanan Laundry #${newOrder?.invoice_no || ''} (${service_name})`, req.body);
       sendSuccess(res, newOrder, 'Pesanan laundry berhasil dibuat dan dijadwalkan', 201);
     } catch (error: any) {
       sendError(res, error.message || 'Gagal membuat pesanan', 400);
@@ -156,6 +159,8 @@ export class OrderController {
           }
         }
       }
+
+      const existingOrder = await this.orderService.getOrderById(id).catch(() => null);
 
       const {
         service_name,
@@ -192,6 +197,69 @@ export class OrderController {
         picId || undefined
       );
 
+      const invoiceNo = updated?.invoice_no || existingOrder?.invoice_no || id;
+      let loggedSpecificAction = false;
+
+      // 1. Catat log Penimbangan (Weighing) jika berat dimasukkan / diubah
+      const oldQty = Number(existingOrder?.quantity) || 0;
+      const newQty = quantity !== undefined ? parseFloat(quantity) : Number(updated?.quantity) || 0;
+      if (newQty > 0 && (oldQty <= 0 || newQty !== oldQty)) {
+        const grandTotal = Math.max(
+          0,
+          (newQty * Number(updated.price_per_unit || existingOrder?.price_per_unit || 0)) +
+            Number(updated.delivery_fee || existingOrder?.delivery_fee || 0) -
+            Number(updated.discount || existingOrder?.discount || 0)
+        );
+        ActivityLogMain(
+          req,
+          `Menimbang Cucian Pesanan #${invoiceNo}: ${newQty} ${updated.unit || unit || 'kg'} (Total Rp ${grandTotal.toLocaleString('id-ID')})`,
+          {
+            invoice_no: invoiceNo,
+            quantity: newQty,
+            unit: updated.unit || unit || 'kg',
+            grand_total: grandTotal,
+          }
+        );
+        loggedSpecificAction = true;
+      }
+
+      // 2. Catat log Penugasan Kurir jika kurir dipilih / diubah
+      const oldCourier = (existingOrder?.courier_name || '').trim();
+      const newCourier = (courier_name !== undefined ? courier_name : updated?.courier_name || '').trim();
+      if (newCourier && newCourier !== oldCourier) {
+        ActivityLogMain(
+          req,
+          `Menugaskan Kurir "${newCourier}" untuk Pesanan #${invoiceNo}`,
+          {
+            invoice_no: invoiceNo,
+            courier_name: newCourier,
+            courier_phone: courier_phone || updated.courier_phone || '',
+          }
+        );
+        loggedSpecificAction = true;
+      }
+
+      // 3. Catat log Perubahan Status Cucian jika status berubah
+      const oldStatus = (existingOrder?.status || '').trim();
+      const newStatus = (updated?.status || status || '').trim();
+      if (newStatus && newStatus.toLowerCase() !== oldStatus.toLowerCase()) {
+        ActivityLogMain(
+          req,
+          `Mengubah Status Pesanan #${invoiceNo} Menjadi: ${newStatus}`,
+          {
+            invoice_no: invoiceNo,
+            old_status: oldStatus,
+            new_status: newStatus,
+          }
+        );
+        loggedSpecificAction = true;
+      }
+
+      // 4. Jika bukan salah satu tindakan spesifik di atas, catat log pembaruan umum
+      if (!loggedSpecificAction) {
+        ActivityLogMain(req, `Memperbarui Data Pesanan #${invoiceNo}`, req.body);
+      }
+
       sendSuccess(res, updated, 'Data pesanan berhasil diperbarui');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal memperbarui data pesanan', 400);
@@ -208,8 +276,26 @@ export class OrderController {
         return;
       }
 
+      const existingOrder = await this.orderService.getOrderById(id).catch(() => null);
+      const invoiceNo = existingOrder?.invoice_no || id;
+
       const picId = getPicId(req);
       const result = await this.orderService.updateOrderStatus(id, targetStatus, picId || undefined);
+
+      const updatedOrder = await this.orderService.getOrderById(id).catch(() => null);
+      const statusLabel = updatedOrder?.status || status || String(targetStatus);
+
+      ActivityLogMain(
+        req,
+        `Mengubah Status Pesanan #${invoiceNo} Menjadi: ${statusLabel}`,
+        {
+          invoice_no: invoiceNo,
+          old_status: existingOrder?.status,
+          new_status: statusLabel,
+          order_statuses_id: updatedOrder?.order_statuses_id || order_statuses_id,
+        }
+      );
+
       sendSuccess(res, result, 'Status pesanan berhasil diperbarui');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal memperbarui status pesanan', 400);
@@ -244,6 +330,10 @@ export class OrderController {
         userId: Number(decryptedUserId),
       });
 
+      const ratedOrder = await this.orderService.getOrderById(id).catch(() => null);
+      const invoiceNo = ratedOrder?.invoice_no || (CryptoUtil.decryptId(id) ? `#${CryptoUtil.decryptId(id)}` : id);
+
+      ActivityLogMain(req, `Memberikan Ulasan Bintang ${numRating} untuk Pesanan #${invoiceNo}`, { invoice_no: invoiceNo, rating: numRating, review, tip_amount: numTip });
       sendSuccess(res, { success }, 'Terima kasih atas penilaian dan ulasan Anda!');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menyimpan ulasan pesanan', 400);
@@ -264,6 +354,8 @@ export class OrderController {
         return;
       }
       const updatedOrder = await this.orderService.applyPromo(id, String(code).trim(), user.id);
+      const invoiceNo = updatedOrder?.invoice_no || (CryptoUtil.decryptId(id) ? `#${CryptoUtil.decryptId(id)}` : id);
+      ActivityLogSecondary(req, `Menggunakan Voucher Promo "${code}" pada Pesanan #${invoiceNo}`, { invoice_no: invoiceNo, code });
       sendSuccess(res, updatedOrder, 'Promo voucher berhasil dipasang ke pesanan');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal memasang voucher promo', 400);
@@ -279,6 +371,8 @@ export class OrderController {
         return;
       }
       const updatedOrder = await this.orderService.removePromo(id, user.id);
+      const invoiceNo = updatedOrder?.invoice_no || (CryptoUtil.decryptId(id) ? `#${CryptoUtil.decryptId(id)}` : id);
+      ActivityLogSecondary(req, `Menghapus Voucher Promo dari Pesanan #${invoiceNo}`, { invoice_no: invoiceNo });
       sendSuccess(res, updatedOrder, 'Promo voucher berhasil dihapus dari pesanan');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menghapus voucher promo', 400);

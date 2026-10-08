@@ -3,6 +3,7 @@ import { SystemService } from "./system.service";
 import { sendSuccess, sendError } from "../../utils/response.util";
 import { CryptoUtil } from "../../utils/crypto.util";
 import { UserCodeUtil } from "../../utils/user-code.util";
+import { ActivityLogMain, ActivityLogSecondary } from "../activity-logs/activity-log.helper";
 
 const getPicId = (req: Request): number | null => {
   return UserCodeUtil.resolveUserCode((req as any).user);
@@ -48,6 +49,11 @@ export class SystemController {
         return;
       }
       const user = await this.service.createUser(req.body, picId);
+      ActivityLogMain(
+        req,
+        `Menambahkan Pengguna Baru: ${user.name_users || user.name || ''} (${user.user_code || ''}) - Role: ${user.role_name || user.role_code || ''}`,
+        req.body
+      );
       sendSuccess(res, user, "Pengguna baru berhasil ditambahkan", 201);
     } catch (err: any) {
       sendError(res, err.message || "Gagal menambahkan pengguna", 500);
@@ -58,6 +64,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       const user = await this.service.updateUser(req.params.id, req.body, picId);
+      ActivityLogMain(req, `Memperbarui Data Pengguna #${req.params.id}`, req.body);
       sendSuccess(res, user, "Data pengguna berhasil diperbarui");
     } catch (err: any) {
       sendError(res, err.message || "Gagal memperbarui pengguna", 500);
@@ -68,6 +75,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.softDeleteUser(req.params.id, picId);
+      ActivityLogMain(req, `Menonaktifkan Pengguna #${req.params.id} (User Keluar)`, { id: req.params.id });
       sendSuccess(
         res,
         { id: req.params.id },
@@ -82,6 +90,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.restoreUser(req.params.id, picId);
+      ActivityLogMain(req, `Memulihkan Pengguna #${req.params.id} (Kembali ke User Aktif)`, { id: req.params.id });
       sendSuccess(
         res,
         { id: req.params.id },
@@ -110,6 +119,7 @@ export class SystemController {
         return;
       }
       await this.service.createRole(req.body, picId);
+      ActivityLogMain(req, `Menambahkan Role Baru: ${req.body.name}`, req.body);
       sendSuccess(res, req.body, "Role baru berhasil ditambahkan", 201);
     } catch (err: any) {
       sendError(res, err.message || "Gagal menambahkan role", 500);
@@ -120,6 +130,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.updateRole(req.params.id, req.body, picId);
+      ActivityLogMain(req, `Memperbarui Role #${req.params.id}`, req.body);
       sendSuccess(res, req.body, "Data role berhasil diperbarui");
     } catch (err: any) {
       sendError(res, err.message || "Gagal memperbarui role", 500);
@@ -130,6 +141,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.softDeleteRole(req.params.id, picId);
+      ActivityLogMain(req, `Menghapus Role #${req.params.id}`, { id: req.params.id });
       sendSuccess(res, { id: req.params.id }, "Role berhasil dihapus");
     } catch (err: any) {
       sendError(res, err.message || "Gagal menghapus role", 500);
@@ -204,6 +216,7 @@ export class SystemController {
         permission_ids || [],
         picId,
       );
+      ActivityLogMain(req, `Memperbarui Matriks Hak Akses Role #${req.params.id}`, req.body);
       sendSuccess(
         res,
         { role_id: req.params.id, permission_ids },
@@ -306,6 +319,11 @@ export class SystemController {
         reference_no,
         picId,
       );
+      ActivityLogMain(
+        req,
+        `Admin Memproses Top-Up Saldo Sebesar Rp ${numAmount.toLocaleString('id-ID')} untuk Pengguna #${req.params.id}`,
+        req.body
+      );
       sendSuccess(res, result, "Top-up saldo pengguna berhasil diproses", 200);
     } catch (err: any) {
       sendError(res, err.message || "Gagal memproses top-up saldo", 500);
@@ -336,6 +354,11 @@ export class SystemController {
       }
       const picId = getPicId(req);
       await this.service.updateWithdrawalStatus(req.params.id, status, admin_notes?.trim(), picId);
+      ActivityLogMain(
+        req,
+        `Admin Mengubah Status Penarikan Dana #${req.params.id} Menjadi: ${status === 'completed' ? 'Disetujui / Selesai' : 'Ditolak'}`,
+        req.body
+      );
       sendSuccess(
         res,
         { id: req.params.id, status, admin_notes },
@@ -372,6 +395,11 @@ export class SystemController {
       }
       const picId = getPicId(req);
       await this.service.updateTopupStatus(req.params.id, status, admin_notes?.trim(), picId);
+      ActivityLogMain(
+        req,
+        `Admin Mengubah Status Pengajuan Top-Up #${req.params.id} Menjadi: ${status === 'completed' ? 'Disetujui / Selesai' : 'Ditolak'}`,
+        req.body
+      );
       sendSuccess(
         res,
         { id: req.params.id, status, admin_notes },

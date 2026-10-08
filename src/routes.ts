@@ -18,6 +18,7 @@ import courierRoutes from './modules/couriers/courier.routes';
 import paymentRoutes from './modules/payments/payment.routes';
 import ongkirRoutes from './modules/ongkirs/ongkir.routes';
 import outletRoutes from './modules/outlets/outlet.routes';
+import activityLogRoutes from './modules/activity-logs/activity-log.routes';
 import { sendSuccess } from './utils/response.util';
 
 const apiRouter = Router();
@@ -42,6 +43,9 @@ apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/promos', promoRoutes);
 apiRouter.use('/user', userRoutes);
 apiRouter.use('/system', systemRoutes);
+apiRouter.use('/system/log-activity', activityLogRoutes);
+apiRouter.use('/system/activity-logs', activityLogRoutes);
+apiRouter.use('/activity-logs', activityLogRoutes);
 apiRouter.use('/icons', iconRoutes);
 apiRouter.use('/storage-shelves', storageShelfRoutes);
 apiRouter.use('/shelves', storageShelfRoutes);

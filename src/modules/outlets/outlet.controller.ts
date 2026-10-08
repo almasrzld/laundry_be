@@ -3,6 +3,7 @@ import { OutletService } from './outlet.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class OutletController {
   private service = new OutletService();
@@ -10,6 +11,7 @@ export class OutletController {
   getOutlets = async (req: Request, res: Response) => {
     try {
       const search = req.query.search as string | undefined;
+      ActivityLogSecondary(req, 'Mengakses Halaman Master Data Cabang', [search]);
       const data = await this.service.getAllOutlets(search);
       return sendSuccess(res, data, 'Data master outlet berhasil diambil');
     } catch (err: any) {
@@ -20,6 +22,7 @@ export class OutletController {
   getOutletById = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      ActivityLogSecondary(req, 'Melihat Detail Master Data Cabang', [id]);
       const item = await this.service.getOutletById(id);
       if (!item) return sendError(res, 'Master outlet tidak ditemukan', 404);
       return sendSuccess(res, item, 'Detail master outlet');
@@ -32,6 +35,7 @@ export class OutletController {
     try {
       const creator = getPicId(req);
       const created = await this.service.createOutlet(req.body, creator);
+      ActivityLogMain(req, `Menambahkan Master Data Cabang Baru "${created.name_outlet || req.body.name_outlet || ''}"`, req.body);
       return sendSuccess(res, created, 'Master outlet berhasil ditambahkan', 201);
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -44,6 +48,7 @@ export class OutletController {
       const updatePic = getPicId(req);
       const updated = await this.service.updateOutlet(id, req.body, updatePic);
       if (!updated) return sendError(res, 'Master outlet tidak ditemukan', 404);
+      ActivityLogMain(req, `Memperbarui Master Data Cabang "${updated.name_outlet || req.body.name_outlet || ''}"`, { id, ...req.body });
       return sendSuccess(res, updated, 'Master outlet berhasil diperbarui');
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -56,9 +61,11 @@ export class OutletController {
       const deletePic = getPicId(req);
       const success = await this.service.deleteOutlet(id, deletePic);
       if (!success) return sendError(res, 'Gagal menghapus master outlet atau data tidak ditemukan', 404);
+      ActivityLogMain(req, `Menghapus Master Data Cabang ID ${id}`, [id]);
       return sendSuccess(res, { deleted: true }, 'Master outlet berhasil dihapus');
     } catch (err: any) {
       return sendError(res, err.message, 400);
     }
   };
 }
+

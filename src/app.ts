@@ -9,6 +9,7 @@ import { errorHandler } from './middleware/error.middleware';
 import { requestLogger } from './middleware/logger.middleware';
 import { decryptRequestMiddleware, decryptParamHandler } from './middleware/crypto.middleware';
 import { optionalAuthMiddleware } from './middleware/auth.middleware';
+import { requestContextMiddleware } from './middleware/request-context.middleware';
 
 const app = express();
 
@@ -16,6 +17,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Request Context (AsyncLocalStorage for Activity Logging & IP/Device tracking)
+app.use(requestContextMiddleware);
 
 // Serve static uploaded files (Payment proofs, avatars, etc.)
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

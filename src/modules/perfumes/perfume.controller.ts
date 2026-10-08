@@ -3,6 +3,7 @@ import { PerfumeService } from './perfume.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class PerfumeController {
   private service = new PerfumeService();
@@ -11,6 +12,7 @@ export class PerfumeController {
     try {
       const search = req.query.search as string | undefined;
       const data = await this.service.getAllPerfumes(search);
+      ActivityLogSecondary(req, 'Mengakses Halaman Master Data Parfum', [search]);
       return sendSuccess(res, data, 'Data master parfum berhasil diambil');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -22,6 +24,7 @@ export class PerfumeController {
       const { id } = req.params;
       const item = await this.service.getPerfumeById(id);
       if (!item) return sendError(res, 'Parfum tidak ditemukan', 404);
+      ActivityLogSecondary(req, 'Mengambil Detail Master Parfum', [id]);
       return sendSuccess(res, item, 'Detail master parfum');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -39,6 +42,7 @@ export class PerfumeController {
         { name, code, scent_type, description, is_active },
         creator,
       );
+      ActivityLogMain(req, `Menambahkan Master Data Parfum Baru "${name}"`, req.body);
       return sendSuccess(res, created, 'Master parfum berhasil ditambahkan', 201);
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -51,6 +55,7 @@ export class PerfumeController {
       const updatePic = getPicId(req);
       const updated = await this.service.updatePerfume(id, req.body, updatePic);
       if (!updated) return sendError(res, 'Parfum tidak ditemukan', 404);
+      ActivityLogMain(req, `Memperbarui Master Data Parfum "${updated.name}"`, { id, ...req.body });
       return sendSuccess(res, updated, 'Master parfum berhasil diperbarui');
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -63,6 +68,7 @@ export class PerfumeController {
       const deletePic = getPicId(req);
       const success = await this.service.deletePerfume(id, deletePic);
       if (!success) return sendError(res, 'Gagal menghapus parfum atau data tidak ditemukan', 404);
+      ActivityLogMain(req, `Menghapus Master Data Parfum ID ${id}`, [id]);
       return sendSuccess(res, { deleted: true }, 'Master parfum berhasil dihapus');
     } catch (err: any) {
       return sendError(res, err.message, 400);

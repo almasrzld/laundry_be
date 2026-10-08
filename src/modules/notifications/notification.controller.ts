@@ -3,6 +3,7 @@ import { NotificationService } from './notification.service';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { CryptoUtil } from '../../utils/crypto.util';
+import { ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 import { notificationEvents } from './notification.events';
 
@@ -67,6 +68,8 @@ export class NotificationController {
       }
 
       await this.notificationService.markAsRead(id);
+      const decId = CryptoUtil.decryptId(id);
+      ActivityLogSecondary(req, `Menandai Notifikasi ID ${decId || id} Telah Dibaca`, { id: decId || id });
       sendSuccess(res, { success: true }, 'Notifikasi ditandai sebagai telah dibaca');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menandai notifikasi', 500);
@@ -81,6 +84,7 @@ export class NotificationController {
         roleCode,
       });
 
+      ActivityLogSecondary(req, 'Menandai Semua Notifikasi Telah Dibaca', []);
       sendSuccess(res, { success: true }, 'Semua notifikasi ditandai sebagai telah dibaca');
     } catch (error: any) {
       sendError(res, error.message || 'Gagal menandai semua notifikasi', 500);
@@ -91,6 +95,7 @@ export class NotificationController {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     if (typeof (res as any).flushHeaders === 'function') {
       (res as any).flushHeaders();
     }
@@ -98,18 +103,27 @@ export class NotificationController {
     res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 
     const onNotification = (payload: any) => {
-      res.write(`data: ${JSON.stringify({ type: 'notification_update', payload })}\n\n`);
+      try {
+        res.write(`data: ${JSON.stringify({ type: 'notification_update', payload })}\n\n`);
+      } catch (_) {}
     };
 
     notificationEvents.on('notification', onNotification);
 
     const keepAlive = setInterval(() => {
-      res.write(': keepalive\n\n');
+      try {
+        res.write(': keepalive\n\n');
+      } catch (_) {
+        clearInterval(keepAlive);
+      }
     }, 25000);
 
-    req.on('close', () => {
+    const cleanup = () => {
       clearInterval(keepAlive);
       notificationEvents.off('notification', onNotification);
-    });
+    };
+
+    req.on('close', cleanup);
+    res.on('close', cleanup);
   };
 }
