@@ -512,3 +512,19 @@ CREATE TABLE IF NOT EXISTS `master_ongkirs` (
   FOREIGN KEY (`units_id`) REFERENCES `master_units`(`id_units`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 24. TABEL USER_DEVICES (TOKEN FIREBASE CLOUD MESSAGING / PUSH NOTIFICATION)
+CREATE TABLE IF NOT EXISTS `user_devices` (
+  `id_user_devices` INT AUTO_INCREMENT PRIMARY KEY,
+  `users_id` INT NOT NULL,
+  `fcm_token` VARCHAR(500) NOT NULL,
+  `device_type` VARCHAR(20) DEFAULT 'android',
+  `device_name` VARCHAR(100) NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_user_devices_users_id` (`users_id`),
+  INDEX `idx_user_devices_token` (`fcm_token`(255)),
+  FOREIGN KEY (`users_id`) REFERENCES `users`(`id_users`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+

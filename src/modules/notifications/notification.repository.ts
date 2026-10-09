@@ -3,6 +3,7 @@ import { CryptoUtil } from '../../utils/crypto.util';
 import { isCustomerRole, isAdminOrStaffRole } from '../../utils/role.util';
 import { hasRolePermission } from '../../middleware/permission.middleware';
 import { emitNotificationEvent } from './notification.events';
+import { FcmService } from './fcm.service';
 
 export interface NotificationEntity {
   id?: number | string;
@@ -184,6 +185,19 @@ export class NotificationRepository {
       targetRole: data.target_role,
       notificationId: newId,
     });
+
+    // Otomatis kirim Push Notification FCM ke perangkat aktif user
+    if (rawUserId) {
+      FcmService.sendToUser(rawUserId, {
+        title: data.title,
+        body: data.message,
+        data: {
+          notificationId: String(newId),
+          type: data.type || 'general',
+          orderId: rawOrderId ? String(rawOrderId) : '',
+        },
+      }).catch((err) => console.error('⚠️ [FCM Send Background Error]:', err));
+    }
 
     return newId;
   }

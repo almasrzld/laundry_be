@@ -13,5 +13,7 @@ router.get('/stream', notificationController.streamNotifications);
 router.get('/unread-count', notificationController.getUnreadCount);
 router.patch('/read-all', notificationController.markAllAsRead);
 router.patch('/:id/read', notificationController.markAsRead);
+router.post('/fcm-token', notificationController.registerFcmToken);
+router.delete('/fcm-token', notificationController.removeFcmToken);
 
 export default router;

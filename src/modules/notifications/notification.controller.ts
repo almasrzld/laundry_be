@@ -4,7 +4,7 @@ import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { ActivityLogSecondary } from '../activity-logs/activity-log.helper';
-
+import { FcmService } from './fcm.service';
 import { notificationEvents } from './notification.events';
 
 export class NotificationController {
@@ -125,5 +125,40 @@ export class NotificationController {
 
     req.on('close', cleanup);
     res.on('close', cleanup);
+  };
+
+  registerFcmToken = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { userId } = this.resolveAuthUser(req);
+      const { fcm_token, device_type, device_name } = req.body;
+
+      if (!fcm_token) {
+        sendError(res, 'Token FCM wajib disertakan', 400);
+        return;
+      }
+
+      await FcmService.registerDeviceToken(
+        userId || req.body.user_id,
+        fcm_token,
+        device_type || 'android',
+        device_name
+      );
+
+      sendSuccess(res, { success: true }, 'Token FCM perangkat berhasil didaftarkan');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal mendaftarkan token FCM', 500);
+    }
+  };
+
+  removeFcmToken = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const { userId } = this.resolveAuthUser(req);
+      const { fcm_token } = req.body;
+
+      await FcmService.removeDeviceToken(userId || req.body.user_id, fcm_token);
+      sendSuccess(res, { success: true }, 'Token FCM perangkat berhasil dihapus');
+    } catch (error: any) {
+      sendError(res, error.message || 'Gagal menghapus token FCM', 500);
+    }
   };
 }
