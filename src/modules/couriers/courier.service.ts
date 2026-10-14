@@ -25,6 +25,7 @@ export class CourierService {
     courierName?: string | null;
     courierPhone?: string | null;
     userId?: number | null;
+    isPersonalView?: boolean;
   }): Promise<CourierSummaryEntity> {
     return await this.courierRepository.getCourierSummary(options);
   }
@@ -33,6 +34,7 @@ export class CourierService {
     courierName?: string | null;
     courierPhone?: string | null;
     statusFilter?: 'active' | 'history' | 'all';
+    isPersonalView?: boolean;
   }): Promise<OrderEntity[]> {
     return await this.courierRepository.getCourierTasks(options);
   }
@@ -78,6 +80,28 @@ export class CourierService {
     limit?: number;
   }) {
     return await this.courierRepository.getCourierTransactions(options);
+  }
+
+  async requestWithdrawal(
+    userId: string | number,
+    amount: number,
+    bankName: string,
+    accountNumber: string,
+    accountName: string,
+    notes?: string,
+  ) {
+    return await this.courierRepository.requestWithdrawal(
+      userId,
+      amount,
+      bankName,
+      accountNumber,
+      accountName,
+      notes,
+    );
+  }
+
+  async getCourierWithdrawals(userId: string | number) {
+    return await this.courierRepository.getCourierWithdrawals(userId);
   }
 }
 

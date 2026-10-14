@@ -1,11 +1,15 @@
 import { UserRepository, AddressEntity } from './user.repository';
 import { UserEntity } from '../auth/auth.repository';
+import { SystemRepository } from '../system/system.repository';
+import { ImageUtil } from '../../utils/image.util';
 
 export class UserService {
   private userRepository: UserRepository;
+  private systemRepository: SystemRepository;
 
-  constructor(userRepository?: UserRepository) {
+  constructor(userRepository?: UserRepository, systemRepository?: SystemRepository) {
     this.userRepository = userRepository || new UserRepository();
+    this.systemRepository = systemRepository || new SystemRepository();
   }
 
   async getProfile(userId: string): Promise<(UserEntity & { addresses: AddressEntity[] }) | null> {
@@ -76,7 +80,29 @@ export class UserService {
     return this.userRepository.getPointHistories(userId);
   }
 
-  async redeemPoints(userId: string, points: number, title?: string, description?: string) {
+  async redeemPoints(
+    userId: string,
+    data: {
+      points: number;
+      code_voucher?: string;
+      code?: string;
+      title?: string;
+      subtitle?: string;
+      description?: string;
+      category?: string;
+      benefit_type?: string;
+      discount_type?: string;
+      discount_amount?: number;
+      max_discount?: number | null;
+      min_order_amount?: number;
+      promos_id?: number | null;
+      start_date?: string;
+      end_date?: string;
+    } | number,
+    titleParam?: string,
+    descriptionParam?: string
+  ) {
+    const points = typeof data === 'number' ? data : data.points;
     if (!points || points <= 0) {
       throw new Error('Jumlah poin yang ditukarkan harus lebih dari 0');
     }
@@ -91,26 +117,118 @@ export class UserService {
       throw new Error(`Poin Anda tidak mencukupi (Poin Anda: ${currentPoints}, Dibutuhkan: ${points})`);
     }
 
+    const rawCode = typeof data === 'object' ? (data.code_voucher || data.code) : null;
+    const title = typeof data === 'object' ? (data.title || titleParam) : titleParam;
+    const subtitle = typeof data === 'object' ? (data.subtitle || data.description || descriptionParam) : descriptionParam;
+    const discountAmount = typeof data === 'object' ? (Number(data.discount_amount) || 0) : 0;
+    const maxDiscount = typeof data === 'object' && data.max_discount !== undefined && data.max_discount !== null ? Number(data.max_discount) : null;
+    const minOrderAmount = typeof data === 'object' ? (Number(data.min_order_amount) || 0) : 0;
+    const category = typeof data === 'object' ? (data.category || 'reward_point') : 'reward_point';
+    const benefitType = typeof data === 'object' ? (data.benefit_type || 'service_discount') : 'service_discount';
+    const discountType = typeof data === 'object' ? (data.discount_type || 'fixed') : 'fixed';
+    const startDate = typeof data === 'object' ? data.start_date : undefined;
+    const endDate = typeof data === 'object' ? data.end_date : undefined;
+    const promosId = typeof data === 'object' ? data.promos_id : null;
+
+    const finalCode = (rawCode || `REWARD-${points}PTS-${Date.now().toString().slice(-4)}`).toUpperCase();
+    const finalTitle = title || `Voucher Reward Diskon (-${points} Poin)`;
+    const finalSubtitle = subtitle || `Ditukarkan dengan ${points} Poin Reward`;
+
     const success = await this.userRepository.deductRewardPoints(
       userId,
       points,
-      title || `Tukar Voucher Diskon (-${points} Poin)`,
-      description || `Penukaran ${points} poin dengan voucher diskon Almas Laundry`
+      finalTitle,
+      `Penukaran kode voucher ${finalCode}`
     );
 
     if (!success) {
       throw new Error('Gagal menukarkan poin, silakan coba kembali');
     }
 
+    // Simpan voucher resmi ke tabel user_vouchers milik user ini
+    const voucher = await this.userRepository.createUserVoucher(userId, {
+      code_voucher: finalCode,
+      title: finalTitle,
+      subtitle: finalSubtitle,
+      category,
+      benefit_type: benefitType,
+      discount_type: discountType,
+      discount_amount: discountAmount > 0 ? discountAmount : (points === 50 ? 10000 : points === 100 ? 10000 : points === 200 ? 20000 : points === 300 ? 15000 : points * 100),
+      max_discount: maxDiscount,
+      min_order_amount: minOrderAmount,
+      points_spent: points,
+      promos_id: promosId,
+      start_date: startDate,
+      end_date: endDate,
+    });
+
     return {
       success: true,
       message: `Selamat! Berhasil menukarkan ${points} poin reward`,
       remaining_points: currentPoints - points,
+      voucher,
     };
+  }
+
+  async getUserVouchers(userId: string, activeOnly = false) {
+    return this.userRepository.getUserVouchers(userId, activeOnly);
+  }
+
+  async verifyUserVoucher(userId: string, code: string) {
+    if (!code || !code.trim()) {
+      throw new Error('Kode voucher wajib diisi');
+    }
+
+    const cleanCode = code.trim().toUpperCase();
+    const voucher = await this.userRepository.findUserVoucherByCode(userId, cleanCode, true);
+
+    if (!voucher) {
+      throw new Error('Kode voucher tidak valid atau belum Anda tukarkan.');
+    }
+
+    if (voucher.is_used) {
+      throw new Error('Voucher ini sudah pernah digunakan untuk pesanan lain.');
+    }
+
+    return voucher;
   }
 
   async getWalletTransactions(userId: string, limit?: number) {
     return this.userRepository.getWalletTransactions(userId, limit);
   }
+
+  async topupWallet(
+    userId: string | number,
+    amount: number,
+    paymentMethod?: string,
+    notes?: string,
+    file?: Express.Multer.File
+  ) {
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount < 10000) {
+      throw new Error('Minimal nominal pengisian saldo adalah Rp 10.000');
+    }
+
+    let proofImageUrl: string | undefined = undefined;
+    if (file && file.buffer) {
+      const processed = await ImageUtil.processAndSavePaymentProof(
+        file.buffer,
+        `TOPUP-${userId}`,
+        file.originalname,
+        file.mimetype
+      );
+      proofImageUrl = processed.relativeUrl;
+    }
+
+    return await this.systemRepository.createTopupRequest(
+      userId,
+      numAmount,
+      paymentMethod || 'Transfer Bank',
+      notes,
+      proofImageUrl
+    );
+  }
 }
+
+
 

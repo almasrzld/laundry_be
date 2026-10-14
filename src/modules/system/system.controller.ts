@@ -3,6 +3,7 @@ import { SystemService } from "./system.service";
 import { sendSuccess, sendError } from "../../utils/response.util";
 import { CryptoUtil } from "../../utils/crypto.util";
 import { UserCodeUtil } from "../../utils/user-code.util";
+import { ActivityLogMain, ActivityLogSecondary } from "../activity-logs/activity-log.helper";
 
 const getPicId = (req: Request): number | null => {
   return UserCodeUtil.resolveUserCode((req as any).user);
@@ -48,6 +49,11 @@ export class SystemController {
         return;
       }
       const user = await this.service.createUser(req.body, picId);
+      ActivityLogMain(
+        req,
+        `Menambahkan Pengguna Baru: ${user.name_users || user.name || ''} (${user.user_code || ''}) - Role: ${user.role_name || user.role_code || ''}`,
+        req.body
+      );
       sendSuccess(res, user, "Pengguna baru berhasil ditambahkan", 201);
     } catch (err: any) {
       sendError(res, err.message || "Gagal menambahkan pengguna", 500);
@@ -58,6 +64,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       const user = await this.service.updateUser(req.params.id, req.body, picId);
+      ActivityLogMain(req, `Memperbarui Data Pengguna #${req.params.id}`, req.body);
       sendSuccess(res, user, "Data pengguna berhasil diperbarui");
     } catch (err: any) {
       sendError(res, err.message || "Gagal memperbarui pengguna", 500);
@@ -68,6 +75,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.softDeleteUser(req.params.id, picId);
+      ActivityLogMain(req, `Menonaktifkan Pengguna #${req.params.id} (User Keluar)`, { id: req.params.id });
       sendSuccess(
         res,
         { id: req.params.id },
@@ -82,6 +90,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.restoreUser(req.params.id, picId);
+      ActivityLogMain(req, `Memulihkan Pengguna #${req.params.id} (Kembali ke User Aktif)`, { id: req.params.id });
       sendSuccess(
         res,
         { id: req.params.id },
@@ -110,6 +119,7 @@ export class SystemController {
         return;
       }
       await this.service.createRole(req.body, picId);
+      ActivityLogMain(req, `Menambahkan Role Baru: ${req.body.name}`, req.body);
       sendSuccess(res, req.body, "Role baru berhasil ditambahkan", 201);
     } catch (err: any) {
       sendError(res, err.message || "Gagal menambahkan role", 500);
@@ -120,6 +130,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.updateRole(req.params.id, req.body, picId);
+      ActivityLogMain(req, `Memperbarui Role #${req.params.id}`, req.body);
       sendSuccess(res, req.body, "Data role berhasil diperbarui");
     } catch (err: any) {
       sendError(res, err.message || "Gagal memperbarui role", 500);
@@ -130,6 +141,7 @@ export class SystemController {
     try {
       const picId = getPicId(req);
       await this.service.softDeleteRole(req.params.id, picId);
+      ActivityLogMain(req, `Menghapus Role #${req.params.id}`, { id: req.params.id });
       sendSuccess(res, { id: req.params.id }, "Role berhasil dihapus");
     } catch (err: any) {
       sendError(res, err.message || "Gagal menghapus role", 500);
@@ -204,6 +216,7 @@ export class SystemController {
         permission_ids || [],
         picId,
       );
+      ActivityLogMain(req, `Memperbarui Matriks Hak Akses Role #${req.params.id}`, req.body);
       sendSuccess(
         res,
         { role_id: req.params.id, permission_ids },
@@ -286,6 +299,116 @@ export class SystemController {
       sendSuccess(res, { id: req.params.id }, "Menu berhasil dihapus");
     } catch (err: any) {
       sendError(res, err.message || "Gagal menghapus menu", 500);
+    }
+  };
+
+  // Wallet & Withdrawal Management (Admin)
+  topupUserBalance = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { amount, notes, reference_no } = req.body;
+      const numAmount = Number(amount);
+      if (!numAmount || numAmount <= 0) {
+        sendError(res, "Nominal top-up harus lebih besar dari 0", 400);
+        return;
+      }
+      const picId = getPicId(req);
+      const result = await this.service.topupUserBalance(
+        req.params.id,
+        numAmount,
+        notes,
+        reference_no,
+        picId,
+      );
+      ActivityLogMain(
+        req,
+        `Admin Memproses Top-Up Saldo Sebesar Rp ${numAmount.toLocaleString('id-ID')} untuk Pengguna #${req.params.id}`,
+        req.body
+      );
+      sendSuccess(res, result, "Top-up saldo pengguna berhasil diproses", 200);
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal memproses top-up saldo", 500);
+    }
+  };
+
+  getWithdrawalRequests = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const status = req.query.status as string;
+      const search = req.query.search as string;
+      const data = await this.service.getWithdrawalRequests(status, search);
+      sendSuccess(res, data, "Daftar permintaan penarikan dana berhasil diambil");
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal mengambil daftar penarikan dana", 500);
+    }
+  };
+
+  updateWithdrawalStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { status, admin_notes } = req.body;
+      if (status !== "completed" && status !== "rejected") {
+        sendError(res, "Status harus 'completed' atau 'rejected'", 400);
+        return;
+      }
+      if (status === "rejected" && (!admin_notes || admin_notes.trim().length === 0)) {
+        sendError(res, "Keterangan / alasan penolakan penarikan dana wajib diisi agar kurir mengetahui penyebabnya", 400);
+        return;
+      }
+      const picId = getPicId(req);
+      await this.service.updateWithdrawalStatus(req.params.id, status, admin_notes?.trim(), picId);
+      ActivityLogMain(
+        req,
+        `Admin Mengubah Status Penarikan Dana #${req.params.id} Menjadi: ${status === 'completed' ? 'Disetujui / Selesai' : 'Ditolak'}`,
+        req.body
+      );
+      sendSuccess(
+        res,
+        { id: req.params.id, status, admin_notes },
+        status === "completed"
+          ? "Penarikan dana berhasil disetujui & ditandai selesai"
+          : "Penarikan dana berhasil ditolak dan saldo dikembalikan ke kurir",
+      );
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal memperbarui status penarikan dana", 500);
+    }
+  };
+
+  getTopupRequests = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const status = req.query.status as string;
+      const search = req.query.search as string;
+      const data = await this.service.getTopupRequests(status, search);
+      sendSuccess(res, data, "Daftar permintaan top-up saldo berhasil diambil");
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal mengambil daftar permintaan top-up", 500);
+    }
+  };
+
+  updateTopupStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { status, admin_notes } = req.body;
+      if (status !== "completed" && status !== "rejected") {
+        sendError(res, "Status harus 'completed' atau 'rejected'", 400);
+        return;
+      }
+      if (status === "rejected" && (!admin_notes || admin_notes.trim().length === 0)) {
+        sendError(res, "Keterangan / alasan penolakan top-up wajib diisi agar pelanggan mengetahui penyebabnya", 400);
+        return;
+      }
+      const picId = getPicId(req);
+      await this.service.updateTopupStatus(req.params.id, status, admin_notes?.trim(), picId);
+      ActivityLogMain(
+        req,
+        `Admin Mengubah Status Pengajuan Top-Up #${req.params.id} Menjadi: ${status === 'completed' ? 'Disetujui / Selesai' : 'Ditolak'}`,
+        req.body
+      );
+      sendSuccess(
+        res,
+        { id: req.params.id, status, admin_notes },
+        status === "completed"
+          ? "Pengajuan top-up berhasil disetujui & saldo telah ditambahkan ke akun pelanggan"
+          : "Pengajuan top-up berhasil ditolak",
+      );
+    } catch (err: any) {
+      sendError(res, err.message || "Gagal memperbarui status pengajuan top-up", 500);
     }
   };
 }

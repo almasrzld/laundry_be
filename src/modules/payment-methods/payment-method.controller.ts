@@ -3,6 +3,7 @@ import { PaymentMethodService } from './payment-method.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class PaymentMethodController {
   private service = new PaymentMethodService();
@@ -12,6 +13,7 @@ export class PaymentMethodController {
       const search = req.query.search as string | undefined;
       const type = req.query.type as string | undefined;
       const data = await this.service.getAllPaymentMethods(search, type);
+      ActivityLogSecondary(req, 'Mengakses Halaman Master Data Metode Pembayaran', [search, type]);
       return sendSuccess(res, data, 'Data master metode pembayaran berhasil diambil');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -23,6 +25,7 @@ export class PaymentMethodController {
       const { id } = req.params;
       const item = await this.service.getPaymentMethodById(id);
       if (!item) return sendError(res, 'Metode pembayaran tidak ditemukan', 404);
+      ActivityLogSecondary(req, 'Mengambil Detail Master Metode Pembayaran', [id]);
       return sendSuccess(res, item, 'Detail master metode pembayaran');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -40,6 +43,7 @@ export class PaymentMethodController {
         { name, code, type, account_number, account_name, description, is_active },
         creator,
       );
+      ActivityLogMain(req, `Menambahkan Master Data Metode Pembayaran Baru "${name}"`, req.body);
       return sendSuccess(res, created, 'Master metode pembayaran berhasil ditambahkan', 201);
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -52,6 +56,7 @@ export class PaymentMethodController {
       const updatePic = getPicId(req);
       const updated = await this.service.updatePaymentMethod(id, req.body, updatePic);
       if (!updated) return sendError(res, 'Metode pembayaran tidak ditemukan', 404);
+      ActivityLogMain(req, `Memperbarui Master Data Metode Pembayaran "${updated.name}"`, { id, ...req.body });
       return sendSuccess(res, updated, 'Master metode pembayaran berhasil diperbarui');
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -64,6 +69,7 @@ export class PaymentMethodController {
       const deletePic = getPicId(req);
       const success = await this.service.deletePaymentMethod(id, deletePic);
       if (!success) return sendError(res, 'Gagal menghapus metode pembayaran atau data tidak ditemukan', 404);
+      ActivityLogMain(req, `Menghapus Master Data Metode Pembayaran ID ${id}`, [id]);
       return sendSuccess(res, { deleted: true }, 'Master metode pembayaran berhasil dihapus');
     } catch (err: any) {
       return sendError(res, err.message, 400);

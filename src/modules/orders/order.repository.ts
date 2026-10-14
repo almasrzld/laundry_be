@@ -348,6 +348,14 @@ export class OrderRepository {
       sets.push('price_per_unit = ?');
       values.push(data.price_per_unit);
     }
+    if (data.delivery_fee !== undefined) {
+      sets.push('delivery_fee = ?');
+      values.push(data.delivery_fee);
+    }
+    if (data.discount !== undefined) {
+      sets.push('discount = ?');
+      values.push(data.discount);
+    }
     if (data.pickup_address !== undefined) {
       sets.push('pickup_address = ?');
       values.push(data.pickup_address);

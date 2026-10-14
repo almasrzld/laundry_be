@@ -3,6 +3,7 @@ import { query } from '../../config/database';
 import { CryptoUtil } from '../../utils/crypto.util';
 import { UserEntity } from '../auth/auth.repository';
 import { isCustomerRole, getPermissionsForRole } from '../../utils/role.util';
+import { normalizeCategory, normalizeBenefitType, normalizeDiscountType } from '../promos/promo.repository';
 
 export interface AddressEntity {
   id?: string | number;
@@ -400,6 +401,68 @@ export class UserRepository {
     return false;
   }
 
+  async deductLaundryPayBalance(
+    userId: string | number,
+    amount: number,
+    orderId?: string | number | null,
+    invoiceNo?: string,
+    title?: string,
+    description?: string
+  ): Promise<{ success: boolean; balanceBefore: number; balanceAfter: number }> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const numericOrderId = orderId ? (CryptoUtil.decryptId(orderId) ?? Number(orderId)) : null;
+    if (!numericUserId || amount <= 0) {
+      return { success: false, balanceBefore: 0, balanceAfter: 0 };
+    }
+
+    const userRes = await query<any>(
+      'SELECT id_users, name_users, laundry_pay_balance FROM users WHERE id_users = ? AND deleted_at IS NULL LIMIT 1',
+      [numericUserId]
+    );
+    if (!userRes || userRes.length === 0) {
+      throw new Error('Pengguna tidak ditemukan atau telah dinonaktifkan.');
+    }
+
+    const currentBal = Number(userRes[0].laundry_pay_balance) || 0;
+    if (currentBal < amount) {
+      const shortage = amount - currentBal;
+      throw new Error(
+        `Saldo LaundryPay Anda tidak mencukupi. Saldo saat ini Rp ${currentBal.toLocaleString('id-ID')}, kurang Rp ${shortage.toLocaleString('id-ID')} dari total pembayaran Rp ${amount.toLocaleString('id-ID')}. Silakan lakukan top-up saldo terlebih dahulu.`
+      );
+    }
+
+    const newBal = currentBal - amount;
+    const res: any = await query(
+      'UPDATE users SET laundry_pay_balance = ? WHERE id_users = ? AND laundry_pay_balance >= ?',
+      [newBal, numericUserId, amount]
+    );
+
+    if (res.affectedRows > 0) {
+      try {
+        await query(
+          `INSERT INTO wallet_transactions 
+            (users_id, orders_id, type, category, amount, balance_before, balance_after, title, description, reference_no, created_at)
+           VALUES (?, ?, 'debit', 'order_payment', ?, ?, ?, ?, ?, ?, NOW())`,
+          [
+            numericUserId,
+            numericOrderId,
+            amount,
+            currentBal,
+            newBal,
+            title || `Pembayaran Pesanan #${invoiceNo || ''}`,
+            description || `Pembayaran pesanan menggunakan saldo LaundryPay`,
+            invoiceNo || null,
+          ]
+        );
+      } catch (e) {
+        console.warn('[WalletTransaction Warning] Gagal mencatat debit saldo LaundryPay:', e);
+      }
+      return { success: true, balanceBefore: currentBal, balanceAfter: newBal };
+    }
+
+    throw new Error('Gagal memproses pemotongan saldo LaundryPay.');
+  }
+
   async getPointHistories(userId: string | number): Promise<PointHistoryEntity[]> {
     const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
     if (!numericUserId) return [];
@@ -461,6 +524,259 @@ export class UserRepository {
       return [];
     }
   }
+
+  async getUserVouchers(userId: string | number, activeOnly = false): Promise<UserVoucherEntity[]> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId) return [];
+
+    try {
+      let sql = `
+        SELECT 
+          id_user_vouchers,
+          users_id,
+          promos_id,
+          code_voucher,
+          title,
+          subtitle,
+          category,
+          benefit_type,
+          discount_type,
+          discount_amount,
+          max_discount,
+          min_order_amount,
+          points_spent,
+          DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
+          DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date,
+          is_used,
+          used_at,
+          orders_id,
+          created_at
+        FROM user_vouchers
+        WHERE users_id = ? AND deleted_at IS NULL
+      `;
+      if (activeOnly) {
+        sql += ' AND is_used = 0 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())';
+      }
+      sql += ' ORDER BY is_used ASC, id_user_vouchers DESC';
+
+      const rows = await query<any>(sql, [numericUserId]);
+      return rows.map(r => ({
+        ...r,
+        id: CryptoUtil.encryptId(r.id_user_vouchers) ?? String(r.id_user_vouchers),
+        id_user_vouchers: r.id_user_vouchers,
+        user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+        users_id: r.users_id,
+        code: r.code_voucher,
+        code_voucher: r.code_voucher,
+        category: normalizeCategory(r.category),
+        benefit_type: normalizeBenefitType(r.benefit_type),
+        discount_type: normalizeDiscountType(r.discount_type),
+        discount_amount: Number(r.discount_amount) || 0,
+        max_discount: r.max_discount !== null && r.max_discount !== undefined ? Number(r.max_discount) : null,
+        min_order_amount: Number(r.min_order_amount) || 0,
+        points_spent: Number(r.points_spent) || 0,
+        start_date: r.start_date || '',
+        end_date: r.end_date || '',
+        is_used: Boolean(r.is_used),
+        order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+      }));
+    } catch (e) {
+      console.warn('[UserVoucher Warning] Gagal mengambil voucher pengguna:', e);
+      return [];
+    }
+  }
+
+  async createUserVoucher(
+    userId: string | number,
+    data: {
+      code_voucher: string;
+      title: string;
+      subtitle?: string;
+      category?: string;
+      benefit_type?: string;
+      discount_type?: string;
+      discount_amount: number;
+      max_discount?: number | null;
+      min_order_amount?: number;
+      points_spent: number;
+      promos_id?: number | null;
+      start_date?: string;
+      end_date?: string;
+    },
+    creatorPic?: number | null
+  ): Promise<UserVoucherEntity> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const creatorVal = creatorPic ?? numericUserId ?? 0;
+    const cleanCode = (data.code_voucher || '').trim().toUpperCase();
+    const category = normalizeCategory(data.category);
+    const benefitType = normalizeBenefitType(data.benefit_type);
+    const discountType = normalizeDiscountType(data.discount_type);
+    const discountAmount = Number(data.discount_amount) || 0;
+    const maxDiscount = data.max_discount !== undefined && data.max_discount !== null ? Number(data.max_discount) : null;
+    const minOrderAmount = Number(data.min_order_amount) || 0;
+    const pointsSpent = Number(data.points_spent) || 0;
+    const startDate = data.start_date ? String(data.start_date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const endDate = data.end_date ? String(data.end_date).slice(0, 10) : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+    const sql = `
+      INSERT INTO user_vouchers (
+        users_id, promos_id, code_voucher, title, subtitle,
+        category, benefit_type, discount_type, discount_amount, max_discount,
+        min_order_amount, points_spent, start_date, end_date,
+        is_used, created_at, creator
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW(), ?)
+    `;
+
+    const res: any = await query(sql, [
+      numericUserId,
+      data.promos_id || null,
+      cleanCode,
+      data.title,
+      data.subtitle || '',
+      category,
+      benefitType,
+      discountType,
+      discountAmount,
+      maxDiscount,
+      minOrderAmount,
+      pointsSpent,
+      startDate,
+      endDate,
+      creatorVal,
+    ]);
+
+    const insertedId = res.insertId;
+    return {
+      id: CryptoUtil.encryptId(insertedId) ?? String(insertedId),
+      id_user_vouchers: insertedId,
+      user_id: CryptoUtil.encryptId(numericUserId) ?? String(numericUserId),
+      users_id: numericUserId,
+      code_voucher: cleanCode,
+      code: cleanCode,
+      title: data.title,
+      subtitle: data.subtitle || '',
+      category,
+      benefit_type: benefitType,
+      discount_type: discountType,
+      discount_amount: discountAmount,
+      max_discount: maxDiscount,
+      min_order_amount: minOrderAmount,
+      points_spent: pointsSpent,
+      start_date: startDate,
+      end_date: endDate,
+      is_used: false,
+      created_at: new Date(),
+    };
+  }
+
+  async findUserVoucherByCode(userId: string | number, code: string, activeOnly = true): Promise<UserVoucherEntity | null> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    if (!numericUserId || !code) return null;
+
+    const cleanCode = code.trim().toUpperCase();
+    let sql = `
+      SELECT 
+        id_user_vouchers,
+        users_id,
+        promos_id,
+        code_voucher,
+        title,
+        subtitle,
+        category,
+        benefit_type,
+        discount_type,
+        discount_amount,
+        max_discount,
+        min_order_amount,
+        points_spent,
+        DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
+        DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date,
+        is_used,
+        used_at,
+        orders_id,
+        created_at
+      FROM user_vouchers
+      WHERE users_id = ? AND UPPER(code_voucher) = ? AND deleted_at IS NULL
+    `;
+    if (activeOnly) {
+      sql += ' AND is_used = 0 AND (start_date IS NULL OR start_date <= CURDATE()) AND (end_date IS NULL OR end_date >= CURDATE())';
+    }
+    sql += ' ORDER BY id_user_vouchers DESC LIMIT 1';
+
+    const rows = await query<any>(sql, [numericUserId, cleanCode]);
+    if (rows.length === 0) return null;
+
+    const r = rows[0];
+    return {
+      ...r,
+      id: CryptoUtil.encryptId(r.id_user_vouchers) ?? String(r.id_user_vouchers),
+      id_user_vouchers: r.id_user_vouchers,
+      user_id: CryptoUtil.encryptId(r.users_id) ?? String(r.users_id),
+      users_id: r.users_id,
+      code: r.code_voucher,
+      code_voucher: r.code_voucher,
+      category: r.category || 'reward_point',
+      benefit_type: r.benefit_type || 'service_discount',
+      discount_type: r.discount_type || 'fixed',
+      discount_amount: Number(r.discount_amount) || 0,
+      max_discount: r.max_discount !== null && r.max_discount !== undefined ? Number(r.max_discount) : null,
+      min_order_amount: Number(r.min_order_amount) || 0,
+      points_spent: Number(r.points_spent) || 0,
+      start_date: r.start_date || '',
+      end_date: r.end_date || '',
+      is_used: Boolean(r.is_used),
+      order_id: r.orders_id ? (CryptoUtil.encryptId(r.orders_id) ?? String(r.orders_id)) : null,
+    };
+  }
+
+  async markUserVoucherAsUsed(
+    userId: string | number,
+    codeOrId: string | number,
+    orderId?: string | number | null
+  ): Promise<boolean> {
+    const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+    const numericOrderId = orderId ? (CryptoUtil.decryptId(orderId) ?? Number(orderId)) : null;
+    if (!numericUserId || !codeOrId) return false;
+
+    const cleanStr = String(codeOrId).trim().toUpperCase();
+    const numericVoucherId = CryptoUtil.decryptId(codeOrId) ?? (typeof codeOrId === 'number' ? codeOrId : null);
+
+    let sql: string;
+    let params: any[];
+
+    if (numericVoucherId) {
+      sql = `UPDATE user_vouchers SET is_used = 1, used_at = NOW(), orders_id = ? WHERE users_id = ? AND id_user_vouchers = ? AND is_used = 0`;
+      params = [numericOrderId, numericUserId, numericVoucherId];
+    } else {
+      sql = `UPDATE user_vouchers SET is_used = 1, used_at = NOW(), orders_id = ? WHERE users_id = ? AND UPPER(code_voucher) = ? AND is_used = 0 LIMIT 1`;
+      params = [numericOrderId, numericUserId, cleanStr];
+    }
+
+    const res: any = await query(sql, params);
+    return res.affectedRows > 0;
+  }
+
+  async unmarkUserVoucher(
+    orderId: string | number,
+    userId?: string | number | null
+  ): Promise<boolean> {
+    const numericOrderId = CryptoUtil.decryptId(orderId) ?? Number(orderId);
+    if (!numericOrderId) return false;
+
+    let sql = `UPDATE user_vouchers SET is_used = 0, used_at = NULL, orders_id = NULL WHERE orders_id = ?`;
+    const params: any[] = [numericOrderId];
+
+    if (userId) {
+      const numericUserId = CryptoUtil.decryptId(userId) ?? Number(userId);
+      if (numericUserId) {
+        sql += ` AND users_id = ?`;
+        params.push(numericUserId);
+      }
+    }
+
+    const res: any = await query(sql, params);
+    return res.affectedRows > 0;
+  }
 }
 
 export interface PointHistoryEntity {
@@ -474,5 +790,31 @@ export interface PointHistoryEntity {
   type: 'earn' | 'redeem';
   title: string;
   description?: string | null;
+  created_at?: Date | string;
+}
+
+export interface UserVoucherEntity {
+  id?: number | string;
+  id_user_vouchers?: number | string;
+  user_id?: number | string;
+  users_id?: number | string;
+  promos_id?: number | string | null;
+  code_voucher: string;
+  code?: string;
+  title: string;
+  subtitle?: string | null;
+  category?: string;
+  benefit_type?: string;
+  discount_type?: string;
+  discount_amount: number;
+  max_discount?: number | null;
+  min_order_amount: number;
+  points_spent: number;
+  start_date?: string;
+  end_date?: string;
+  is_used: boolean | number;
+  used_at?: Date | string | null;
+  orders_id?: number | string | null;
+  order_id?: number | string | null;
   created_at?: Date | string;
 }

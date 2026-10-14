@@ -15,6 +15,10 @@ import paymentMethodRoutes from './modules/payment-methods/payment-method.routes
 import orderStatusRoutes from './modules/order-statuses/order-status.routes';
 import notificationRoutes from './modules/notifications/notification.routes';
 import courierRoutes from './modules/couriers/courier.routes';
+import paymentRoutes from './modules/payments/payment.routes';
+import ongkirRoutes from './modules/ongkirs/ongkir.routes';
+import outletRoutes from './modules/outlets/outlet.routes';
+import activityLogRoutes from './modules/activity-logs/activity-log.routes';
 import { sendSuccess } from './utils/response.util';
 
 const apiRouter = Router();
@@ -32,14 +36,21 @@ apiRouter.get('/health', (req, res) => {
 apiRouter.use('/auth', authRoutes);
 apiRouter.use('/services', serviceRoutes);
 apiRouter.use('/orders', orderRoutes);
+apiRouter.use('/payments', paymentRoutes);
+apiRouter.use('/webhooks/xendit', paymentRoutes);
 apiRouter.use('/couriers', courierRoutes);
 apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/promos', promoRoutes);
 apiRouter.use('/user', userRoutes);
 apiRouter.use('/system', systemRoutes);
+apiRouter.use('/system/log-activity', activityLogRoutes);
+apiRouter.use('/system/activity-logs', activityLogRoutes);
+apiRouter.use('/activity-logs', activityLogRoutes);
 apiRouter.use('/icons', iconRoutes);
 apiRouter.use('/storage-shelves', storageShelfRoutes);
 apiRouter.use('/shelves', storageShelfRoutes);
+apiRouter.use('/ongkirs', ongkirRoutes);
+apiRouter.use('/outlets', outletRoutes);
 
 // Modular Master Data Routes
 apiRouter.use('/master/icons', iconRoutes);
@@ -49,6 +60,8 @@ apiRouter.use('/master/perfumes', perfumeRoutes);
 apiRouter.use('/master/shelf-types', shelfTypeRoutes);
 apiRouter.use('/master/payment-methods', paymentMethodRoutes);
 apiRouter.use('/master/order-statuses', orderStatusRoutes);
+apiRouter.use('/master/ongkirs', ongkirRoutes);
+apiRouter.use('/master/outlets', outletRoutes);
 
 apiRouter.use('/units', unitRoutes);
 apiRouter.use('/service-categories', serviceCategoryRoutes);

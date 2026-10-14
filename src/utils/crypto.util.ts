@@ -87,9 +87,11 @@ export class CryptoUtil {
 
     try {
       const decrypted = CryptoUtil.dekripsi(strVal);
-      const parsed = parseInt(decrypted, 10);
-      if (!isNaN(parsed)) {
-        return parsed;
+      if (decrypted && /^\d+$/.test(decrypted)) {
+        const parsed = parseInt(decrypted, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          return parsed;
+        }
       }
     } catch (_) {}
 

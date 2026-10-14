@@ -3,6 +3,7 @@ import { UnitService } from './unit.service';
 import { sendSuccess, sendError } from '../../utils/response.util';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import { getPicId } from '../../utils/user-code.util';
+import { ActivityLogMain, ActivityLogSecondary } from '../activity-logs/activity-log.helper';
 
 export class UnitController {
   private service = new UnitService();
@@ -11,6 +12,7 @@ export class UnitController {
     try {
       const search = req.query.search as string | undefined;
       const data = await this.service.getAllUnits(search);
+      ActivityLogSecondary(req, 'Mengakses Halaman Master Satuan', [search]);
       return sendSuccess(res, data, 'Data master satuan berhasil diambil');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -22,6 +24,7 @@ export class UnitController {
       const { id } = req.params;
       const item = await this.service.getUnitById(id);
       if (!item) return sendError(res, 'Satuan tidak ditemukan', 404);
+      ActivityLogSecondary(req, 'Mengambil Detail Master Satuan', [id]);
       return sendSuccess(res, item, 'Detail master satuan');
     } catch (err: any) {
       return sendError(res, err.message, 500);
@@ -30,14 +33,26 @@ export class UnitController {
 
   createUnit = async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { name, code, symbol, description, is_active } = req.body;
-      if (!name || !code) {
+      const { name_unit, code_unit, symbol, description, is_active } = req.body;
+
+      if (!name_unit?.trim() || !code_unit?.trim()) {
         return sendError(res, 'Nama dan kode satuan wajib diisi', 400);
       }
       const creator = getPicId(req);
       const created = await this.service.createUnit(
-        { name, code, symbol, description, is_active },
+        {
+          name_unit: name_unit.trim(),
+          code_unit: code_unit.trim(),
+          symbol,
+          description,
+          is_active: Boolean(is_active),
+        },
         creator,
+      );
+      ActivityLogMain(
+        req,
+        `Menambahkan Master Satuan Baru "${name_unit.trim()}" (Kode: ${code_unit.trim()}, Simbol: ${symbol || '-'})`,
+        req.body
       );
       return sendSuccess(res, created, 'Master satuan berhasil ditambahkan', 201);
     } catch (err: any) {
@@ -51,6 +66,11 @@ export class UnitController {
       const updatePic = getPicId(req);
       const updated = await this.service.updateUnit(id, req.body, updatePic);
       if (!updated) return sendError(res, 'Satuan tidak ditemukan', 404);
+      ActivityLogMain(
+        req,
+        `Memperbarui Master Satuan "${updated.name_unit}" (Kode: ${updated.code_unit})`,
+        { id, ...req.body }
+      );
       return sendSuccess(res, updated, 'Master satuan berhasil diperbarui');
     } catch (err: any) {
       return sendError(res, err.message, 400);
@@ -63,6 +83,7 @@ export class UnitController {
       const deletePic = getPicId(req);
       const success = await this.service.deleteUnit(id, deletePic);
       if (!success) return sendError(res, 'Gagal menghapus satuan atau data tidak ditemukan', 404);
+      ActivityLogMain(req, `Menghapus Master Satuan ID ${id}`, { id });
       return sendSuccess(res, { deleted: true }, 'Master satuan berhasil dihapus');
     } catch (err: any) {
       return sendError(res, err.message, 400);

@@ -205,4 +205,41 @@ export class SystemService {
   ): Promise<boolean> {
     return await this.repo.softDeleteMenu(id, deletePic);
   }
+
+  // Wallet & Withdrawals (Admin)
+  async topupUserBalance(
+    userId: string,
+    amount: number,
+    notes?: string,
+    referenceNo?: string,
+    creatorPic: number | null = null,
+  ): Promise<{ success: boolean; balance_before: number; balance_after: number }> {
+    return await this.repo.topupUserBalance(userId, amount, notes, referenceNo, creatorPic);
+  }
+
+  async getWithdrawalRequests(status?: string, search?: string): Promise<any[]> {
+    return await this.repo.getWithdrawalRequests(status, search);
+  }
+
+  async updateWithdrawalStatus(
+    withdrawalId: string,
+    status: "completed" | "rejected",
+    adminNotes?: string,
+    processedBy: number | null = null,
+  ): Promise<boolean> {
+    return await this.repo.updateWithdrawalStatus(withdrawalId, status, adminNotes, processedBy);
+  }
+
+  async getTopupRequests(status?: string, search?: string): Promise<any[]> {
+    return await this.repo.getTopupRequests(status, search);
+  }
+
+  async updateTopupStatus(
+    topupId: string,
+    status: "completed" | "rejected",
+    adminNotes?: string,
+    processedBy: number | null = null,
+  ): Promise<boolean> {
+    return await this.repo.updateTopupStatus(topupId, status, adminNotes, processedBy);
+  }
 }
