@@ -20,7 +20,7 @@ export function getFirebaseAdmin(): admin.app.App | null {
       : null;
 
     if (!credentialsPath) {
-      console.log('ℹ️  [Firebase FCM] File kredensial firebase-service-account.json belum ditemukan di src/config/. Push notification FCM berjalan dalam mode simulasi/standby.');
+      console.log('[Firebase FCM] File kredensial firebase-service-account.json belum ditemukan di src/config/. Push notification FCM berjalan dalam mode simulasi/standby.');
       return null;
     }
 
@@ -30,10 +30,10 @@ export function getFirebaseAdmin(): admin.app.App | null {
       credential: admin.credential.cert(serviceAccount),
     });
 
-    console.log('🔥 [Firebase FCM] Firebase Admin SDK berhasil diinisialisasi untuk push notifications.');
+    console.log('[Firebase FCM] Firebase Admin SDK berhasil diinisialisasi untuk push notifications.');
     return firebaseApp;
   } catch (error) {
-    console.warn('⚠️  [Firebase FCM] Gagal menginisialisasi Firebase Admin:', (error as any)?.message || error);
+    console.warn('[Firebase FCM] Gagal menginisialisasi Firebase Admin:', (error as any)?.message || error);
     return null;
   }
 }

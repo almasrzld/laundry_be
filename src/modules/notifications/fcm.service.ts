@@ -105,7 +105,7 @@ export class FcmService {
     const messaging = getMessaging();
     if (!messaging) {
       // Firebase credentials belum dipasang, catat log simulasi tanpa error
-      console.log(`📡 [FCM Mock] Push Notification ke User ID ${resolvedUserId}: "${payload.title}" - ${payload.body}`);
+      console.log(`[FCM Mock] Push Notification ke User ID ${resolvedUserId}: "${payload.title}" - ${payload.body}`);
       return { success: true, sentCount: 0 };
     }
 
@@ -172,7 +172,7 @@ export class FcmService {
 
       return { success: true, sentCount: response.successCount };
     } catch (err) {
-      console.error('⚠️ [FCM Send Error]:', (err as any)?.message || err);
+      console.error('[FCM Send Error]:', (err as any)?.message || err);
       return { success: false, sentCount: 0 };
     }
   }

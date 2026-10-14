@@ -196,7 +196,7 @@ export class NotificationRepository {
           type: data.type || 'general',
           orderId: rawOrderId ? String(rawOrderId) : '',
         },
-      }).catch((err) => console.error('⚠️ [FCM Send Background Error]:', err));
+      }).catch((err) => console.error('[FCM Send Background Error]:', err));
     }
 
     return newId;
