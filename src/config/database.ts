@@ -545,23 +545,38 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
 
       // Auto-register permission: log-activity.index
       try {
-        // Update previous key if any
-        await connection.query(
-          "UPDATE permissions SET code = 'log-activity.index', name_permissions = 'Lihat Log Activity' WHERE LOWER(code) IN ('system.activity-log', 'log-activity', 'activity-log.index') AND deleted_at IS NULL"
-        );
-
         const [existingPerm]: any = await connection.query(
           "SELECT id_permissions FROM permissions WHERE LOWER(code) = 'log-activity.index' AND deleted_at IS NULL LIMIT 1"
         );
         let permId: number | null = null;
         if (!existingPerm || existingPerm.length === 0) {
-          const [insPerm]: any = await connection.query(`
-            INSERT INTO permissions (name_permissions, code, module, created_at, creator)
-            VALUES ('Lihat Log Activity', 'log-activity.index', 'System', NOW(), 1)
-          `);
-          permId = insPerm.insertId;
+          const [legacyPerm]: any = await connection.query(
+            "SELECT id_permissions FROM permissions WHERE LOWER(code) IN ('system.activity-log', 'log-activity', 'activity-log.index') AND deleted_at IS NULL LIMIT 1"
+          );
+          if (legacyPerm && legacyPerm.length > 0) {
+            permId = legacyPerm[0].id_permissions;
+            await connection.query(
+              "UPDATE permissions SET code = 'log-activity.index', name_permissions = 'Lihat Log Activity' WHERE id_permissions = ?",
+              [permId]
+            );
+          } else {
+            const [insPerm]: any = await connection.query(`
+              INSERT INTO permissions (name_permissions, code, module, created_at, creator)
+              VALUES ('Lihat Log Activity', 'log-activity.index', 'System', NOW(), 1)
+            `);
+            permId = insPerm.insertId;
+          }
         } else {
           permId = existingPerm[0].id_permissions;
+          await connection.query(
+            "UPDATE permissions SET name_permissions = 'Lihat Log Activity' WHERE id_permissions = ?",
+            [permId]
+          );
+          // Soft-delete legacy duplicate permissions if any
+          await connection.query(
+            "UPDATE permissions SET deleted_at = NOW() WHERE LOWER(code) IN ('system.activity-log', 'log-activity', 'activity-log.index') AND id_permissions != ? AND deleted_at IS NULL",
+            [permId]
+          );
         }
 
         // Grant permission to superadmin and admin roles
@@ -572,7 +587,7 @@ export const testDatabaseConnection = async (): Promise<boolean> => {
           if (Array.isArray(adminRoles)) {
             for (const r of adminRoles) {
               const [hasRolePerm]: any = await connection.query(
-                "SELECT id_role_menus FROM role_permissions WHERE roles_id = ? AND permissions_id = ? AND deleted_at IS NULL LIMIT 1",
+                "SELECT id_role_permissions FROM role_permissions WHERE roles_id = ? AND permissions_id = ? AND deleted_at IS NULL LIMIT 1",
                 [r.id_roles, permId]
               );
               if (!hasRolePerm || hasRolePerm.length === 0) {
