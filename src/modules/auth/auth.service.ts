@@ -255,8 +255,14 @@ export class AuthService {
     await this.authRepository.updateActiveSession(userId, null);
   }
 
-  async getMe(userId: string): Promise<UserEntity | null> {
-    return this.authRepository.findById(userId);
+  async getMe(userId: string): Promise<any> {
+    const user = await this.authRepository.findById(userId);
+    if (!user) return null;
+    const permissions = await getPermissionsForRole(user.role_code);
+    return {
+      ...user,
+      permissions,
+    };
   }
 
   /**
